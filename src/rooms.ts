@@ -1,4 +1,7 @@
 import { Hono } from 'hono'
+import { eq, and, ne, count } from 'drizzle-orm'
+import { getDb } from './db'
+import { rooms, roomPlayers, users } from './db/schema'
 import { requireAuth } from './authMiddleware'
 
 type Bindings = { DB: D1Database }
@@ -6,52 +9,78 @@ type Variables = { userId: number }
 
 export const roomsRoutes = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
-roomsRoutes.use('*', requireAuth) // همه‌ی route های زیر این فایل، نیاز به لاگین دارن
+roomsRoutes.use('*', requireAuth)
 
-// لیست روم‌های باز
+// لیست روم‌های باز (با تعداد بازیکن هر کدوم)
 roomsRoutes.get('/', async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT r.id, r.name, r.status, r.created_at, COUNT(rp.user_id) as player_count
-     FROM rooms r LEFT JOIN room_players rp ON rp.room_id = r.id
-     WHERE r.status != 'finished'
-     GROUP BY r.id ORDER BY r.created_at DESC LIMIT 50`
-  ).all()
-  return c.json({ rooms: results })
+  const db = getDb(c.env.DB)
+
+  const roomList = await db
+    .select({
+      id: rooms.id,
+      name: rooms.name,
+      status: rooms.status,
+      created_at: rooms.created_at,
+      player_count: count(roomPlayers.user_id),
+    })
+    .from(rooms)
+    .leftJoin(roomPlayers, eq(roomPlayers.room_id, rooms.id))
+    .where(ne(rooms.status, 'finished'))
+    .groupBy(rooms.id)
+
+  return c.json({ rooms: roomList })
 })
 
 // ساخت روم جدید
 roomsRoutes.post('/', async (c) => {
   const userId = c.get('userId')
+  const db = getDb(c.env.DB)
+
+  const [user] = await db.select().from(users).where(eq(users.id, userId))
+  if (user?.active_room_id) {
+    return c.json({ error: 'شما همین الان توی یه روم دیگه‌اید' }, 409)
+  }
+
   const { name } = await c.req.json<{ name: string }>()
-
   const roomId = crypto.randomUUID()
-  await c.env.DB.prepare(
-    "INSERT INTO rooms (id, name, status, created_by) VALUES (?, ?, 'waiting', ?)"
-  )
-    .bind(roomId, name || 'بازی جدید', userId)
-    .run()
 
-  // سازنده‌ی روم خودکار عضو روم هم می‌شه
-  await c.env.DB.prepare('INSERT INTO room_players (room_id, user_id) VALUES (?, ?)')
-    .bind(roomId, userId)
-    .run()
+  await db.batch([
+    db.insert(rooms).values({
+      id: roomId,
+      name: name || 'بازی جدید',
+      status: 'waiting',
+      created_by: userId,
+      created_at: Date.now(),
+    }),
+    db.insert(roomPlayers).values({ room_id: roomId, user_id: userId }),
+    db.update(users).set({ active_room_id: roomId }).where(eq(users.id, userId)),
+  ])
 
   return c.json({ roomId })
 })
 
-// join به یه روم موجود
+// join به روم موجود
 roomsRoutes.post('/:id/join', async (c) => {
   const userId = c.get('userId')
   const roomId = c.req.param('id')
+  const db = getDb(c.env.DB)
 
-  const room = await c.env.DB.prepare('SELECT id FROM rooms WHERE id = ?').bind(roomId).first()
-  if (!room) return c.json({ error: 'room not found' }, 404)
+  const [user] = await db.select().from(users).where(eq(users.id, userId))
+  if (user?.active_room_id) {
+    return c.json({ error: 'شما همین الان توی یه روم دیگه‌اید' }, 409)
+  }
 
-  await c.env.DB.prepare(
-    'INSERT OR IGNORE INTO room_players (room_id, user_id) VALUES (?, ?)'
-  )
-    .bind(roomId, userId)
-    .run()
+  const [room] = await db
+    .select()
+    .from(rooms)
+    .where(and(eq(rooms.id, roomId), ne(rooms.status, 'finished')))
+
+  if (!room) return c.json({ error: 'room not found or finished' }, 404)
+
+  await db.batch([
+    db.insert(roomPlayers).values({ room_id: roomId, user_id: userId }),
+    db.update(users).set({ active_room_id: roomId }).where(eq(users.id, userId)),
+  ])
 
   return c.json({ ok: true, roomId })
 })

@@ -8,6 +8,7 @@ export const users = sqliteTable('users', {
   last_name: text('last_name'),
   photo_url: text('photo_url'),
   active_room_id: text('active_room_id'),
+  role: text('role').notNull().default('player'), // 'player' | 'admin'
   created_at: integer('created_at').notNull().default(0),
 })
 

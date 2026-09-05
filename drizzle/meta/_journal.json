@@ -8,6 +8,13 @@
       "when": 1788564340275,
       "tag": "0000_next_vivisector",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788648363663,
+      "tag": "0001_remarkable_mentallo",
+      "breakpoints": true
     }
   ]
 }

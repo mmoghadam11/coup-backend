@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { authRoutes } from './auth'
+import { roomsRoutes } from './rooms'
 
 type Bindings = {
   TELEGRAM_BOT_TOKEN: string
@@ -18,5 +19,6 @@ app.use('*', cors({
 app.get('/', (c) => c.text('Hello Hono!'))
 
 app.route('/auth', authRoutes)
+app.route('/rooms', roomsRoutes)
 
 export default app
