@@ -15,6 +15,13 @@
       "when": 1788648363663,
       "tag": "0001_remarkable_mentallo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788798268121,
+      "tag": "0002_smart_blockbuster",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,18 @@
 			"database_id": "3f012646-9475-49dd-9156-ebadda2a922a",
 			// "remote": true
 		}
-	]
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "ROOM_DO",
+				"class_name": "RoomDO"
+			}
+		]
+	},
+	"migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] }
+  ]
 	// "compatibility_flags": [
 	//   "nodejs_compat"
 	// ],

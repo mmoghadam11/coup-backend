@@ -4,7 +4,7 @@ export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   telegram_id: integer('telegram_id').notNull().unique(),
   username: text('username'),
-  first_name: text('first_name'),
+  first_name: text('first_name').notNull(),
   last_name: text('last_name'),
   photo_url: text('photo_url'),
   active_room_id: text('active_room_id'),

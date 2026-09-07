@@ -3,9 +3,12 @@ import { cors } from 'hono/cors'
 import { authRoutes } from './auth'
 import { roomsRoutes } from './rooms'
 
+export { RoomDO } from './durable-objects/RoomDO'
+
 type Bindings = {
   TELEGRAM_BOT_TOKEN: string
   DB: D1Database
+  ROOM_DO: DurableObjectNamespace
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -19,6 +22,13 @@ app.use('*', cors({
 app.get('/', (c) => c.text('Hello Hono!'))
 
 app.route('/auth', authRoutes)
+// اتصال WebSocket به یه روم مشخص
+app.get('/rooms/:id/ws', (c) => {
+  const roomId = c.req.param('id')
+  const id = c.env.ROOM_DO.idFromName(roomId) // یه id ثابت بر اساس roomId
+  const stub = c.env.ROOM_DO.get(id)
+  return stub.fetch(c.req.raw)
+})
 app.route('/rooms', roomsRoutes)
 
 export default app

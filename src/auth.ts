@@ -21,8 +21,10 @@ authRoutes.post('/telegram', async (c) => {
   const db = getDb(c.env.DB)
 
   let [user] = await db.select().from(users).where(eq(users.telegram_id, tgUser.id))
+  let isNewUser = false
 
   if (!user) {
+    isNewUser = true // <-- همینجا مشخصه که تازه داره ساخته می‌شه
     await db.insert(users).values({
       telegram_id: tgUser.id,
       username: tgUser.username ?? null,
@@ -42,5 +44,5 @@ authRoutes.post('/telegram', async (c) => {
     created_at: Date.now(),
   })
 
-  return c.json({ user, sessionToken })
+  return c.json({ user, sessionToken, isNewUser })
 })
