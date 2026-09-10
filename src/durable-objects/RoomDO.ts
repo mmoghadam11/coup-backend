@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db'
-import { sessions, users, rooms } from '../db/schema'
+import { sessions, users, rooms, roomPlayers  } from '../db/schema'
 import { GameState, initialGameState, isEliminated } from '../game-logic/state'
 import { buildFullDeck } from '../game-logic/roles'
 import { shuffle } from '../game-logic/state'
@@ -14,6 +14,7 @@ import {
   respondToBlock,
 } from '../game-logic/actions/challengeFlow'
 import { revealCard } from '../game-logic/actions/reveal'
+import { dealNewGame } from '../game-logic/lifecycle'
 
 type Env = { DB: D1Database }
 
@@ -48,6 +49,7 @@ export class RoomDO {
       const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
       if (room) game.creatorId = room.created_by
     }
+    game.roomId = roomId
 
     const existing = game.players.find((p) => p.userId === user.id)
     if (existing) {
@@ -111,6 +113,15 @@ export class RoomDO {
         break
       case 'reveal_card':
         revealCard(game, userId, data.roleIndex)
+        break
+        case 'restart_game':
+    this.restartGame(game, userId)
+    break
+      case 'leave_room':
+        await this.leaveRoom(game, userId)
+        break
+      case 'close_room':
+        await this.closeRoom(game, userId)
         break
       default:
         return
@@ -193,4 +204,43 @@ export class RoomDO {
       this.sendPrivateTo(ws, game, userId)
     }
   }
+
+  private restartGame(game: GameState, requesterId: number) {
+  if (game.phase !== 'game_over') return
+  if (game.creatorId !== requesterId) return
+  dealNewGame(game)
+  game.log.push('بازی مجدد شروع شد')
+}
+
+private async leaveRoom(game: GameState, userId: number) {
+  if (game.phase !== 'game_over') return // فقط بعد از پایان بازی می‌شه خارج شد
+  if (!game.roomId) return
+
+  const db = getDb(this.env.DB)
+  await db
+    .delete(roomPlayers)
+    .where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+  await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+
+  const player = game.players.find((p) => p.userId === userId)
+  game.players = game.players.filter((p) => p.userId !== userId)
+  game.turnOrder = game.turnOrder.filter((id) => id !== userId)
+  game.log.push(`${player?.firstName ?? 'یک بازیکن'} از روم خارج شد`)
+}
+
+private async closeRoom(game: GameState, requesterId: number) {
+  if (game.creatorId !== requesterId) return
+  if (!game.roomId) return
+
+  const db = getDb(this.env.DB)
+  await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+
+  for (const player of game.players) {
+    await db.update(users).set({ active_room_id: null }).where(eq(users.id, player.userId))
+  }
+  await db.delete(roomPlayers).where(eq(roomPlayers.room_id, game.roomId))
+
+  game.phase = 'room_closed'
+  game.log.push('روم توسط سازنده بسته شد')
+}
 }

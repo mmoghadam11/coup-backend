@@ -1,14 +1,17 @@
-import { GameState } from './state'
-import { isEliminated } from './state'
+import { GameState, isEliminated } from './state'
 
 export function advanceTurn(game: GameState) {
+  const total = game.turnOrder.length
   let next = game.currentTurnIndex
-  do {
-    next = (next + 1) % game.turnOrder.length
-    const player = game.players.find((p) => p.userId === game.turnOrder[next])
-    if (player && !isEliminated(player)) break
-  } while (next !== game.currentTurnIndex)
 
-  game.currentTurnIndex = next
-  game.phase = 'awaiting_action'
+  for (let i = 0; i < total; i++) {
+    next = (next + 1) % total
+    const player = game.players.find((p) => p.userId === game.turnOrder[next])
+    if (player && !isEliminated(player)) {
+      game.currentTurnIndex = next
+      game.phase = 'awaiting_action'
+      return
+    }
+  }
+  // اگه به اینجا رسیدیم یعنی همه حذف شدن؛ عملاً نباید اتفاق بیفته چون بازی زودتر باید game_over بشه
 }

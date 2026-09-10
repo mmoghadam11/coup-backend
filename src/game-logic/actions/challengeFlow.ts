@@ -1,6 +1,6 @@
 import { GameState, shuffle } from '../state'
 import { ActionType, RoleName } from '../types'
-import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost, isActionChallengeable } from '../roles'
+import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost } from '../roles'
 
 export function startChallengeableAction(
   game: GameState,
@@ -37,6 +37,8 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
   const pending = game.pendingAction
   if (!pending || game.phase !== 'awaiting_response') return
   if (!pending.awaitingResponseFrom.includes(String(userId))) return
+  if (response === 'challenge' && !pending.claimedRole) return
+  
 
   pending.responses[String(userId)] = response
 
@@ -91,6 +93,8 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   }
 }
 
+// context = 'action' یعنی داریم به خودِ ادعای اکشن challenge می‌زنیم
+// context = 'block' یعنی داریم به ادعای بلاک‌کننده challenge می‌زنیم
 function resolveChallenge(
   game: GameState,
   claimerId: string,
@@ -105,20 +109,32 @@ function resolveChallenge(
   const hasRole = idx !== -1
 
   if (hasRole) {
+    // ادعا درست بود: claimer کارتشو با یه کارت جدید از دسته عوض می‌کنه
     game.deck.push(claimer.roles[idx])
-    game.deck = shuffle(game.deck) // یا مستقیم import shuffle بالای فایل
+    game.deck = shuffle(game.deck)
     claimer.roles[idx] = game.deck.pop()!
     game.log.push('ادعا درست بود؛ کارت جدید گرفت')
+
+    // چالش‌کننده باخته، باید یه کارت رو از دست بده
     game.revealPending = { playerId: Number(challengerId), reason: 'lost_challenge' }
-    // context === 'block' یعنی بلاک واقعی بود؛ pendingAction باید کامل کنسل بشه
+
+    // اگه روی یه بلاک چالش زده بودن و بلاک درست از آب دراومد، خودِ اکشن اصلی کنسل می‌شه
     if (context === 'block') game.pendingAction = null
+    // اگه context === 'action' بود، pendingAction دست‌نخورده می‌مونه تا بعد از reveal، اثرش اجرا بشه
   } else {
+    // ادعا دروغ بود: claimer باید یه کارت رو از دست بده
     game.log.push('ادعا دروغ بود!')
     game.revealPending = { playerId: Number(claimerId), reason: 'lost_challenge' }
-    if (context === 'action') game.pendingAction = null
-    // اگه context === 'block' و دروغ بود، بلاک باطل می‌شه ولی pendingAction (اکشن اصلی) می‌مونه تا بعد از reveal اجرا بشه
-    if (context === 'block' && game.pendingAction) {
-      game.pendingAction.blockedBy = undefined
+
+    if (context === 'action') {
+      // خودِ اکشن دروغ بود، کلاً کنسل می‌شه
+      game.pendingAction = null
+    } else {
+      // بلاک دروغ بود؛ بلاک باطل می‌شه ولی اکشن اصلی باید بعد از reveal اجرا بشه
+      if (game.pendingAction) {
+        game.pendingAction.blockedBy = undefined
+        game.pendingAction.blockChallengeResponses = undefined
+      }
     }
   }
 }
@@ -127,7 +143,11 @@ export function resolvePendingActionEffect(game: GameState) {
   const pending = game.pendingAction
   if (!pending) return
 
-  const actor = game.players.find((p) => p.userId === Number(pending.actorId))!
+  const actor = game.players.find((p) => p.userId === Number(pending.actorId))
+  if (!actor) {
+    game.pendingAction = null
+    return
+  }
   const target = pending.targetId ? game.players.find((p) => p.userId === Number(pending.targetId)) : undefined
 
   switch (pending.action) {

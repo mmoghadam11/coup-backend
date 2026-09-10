@@ -61,6 +61,7 @@ export type GamePhase =
   | 'exchange_in_progress'   // برای ambassador (انتخاب ۲ کارت از ۴)
   | 'contessa_in_progress'   // برای contessa_other (هدف باید یه کارت انتخاب کنه)
   | 'game_over'
+  | 'room_closed'
 
 export interface PublicGameState {
   roomId: string

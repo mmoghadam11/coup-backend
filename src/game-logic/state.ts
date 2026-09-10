@@ -15,6 +15,7 @@ export interface RevealPending {
 }
 
 export interface GameState {
+  roomId: string | null
   phase: GamePhase
   creatorId: number | null
   players: InternalPlayer[]
@@ -29,6 +30,7 @@ export interface GameState {
 
 export function initialGameState(): GameState {
   return {
+    roomId: null,
     phase: 'waiting_for_players',
     creatorId: null,
     players: [],
