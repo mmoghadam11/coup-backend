@@ -1,15 +1,51 @@
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db'
 import { sessions, users } from '../db/schema'
+import { RoleName, GamePhase } from '../game-logic/types'
+import { buildFullDeck } from '../game-logic/roles'
+import { rooms } from '../db/schema'
 
-type Env = {
-  DB: D1Database
-}
+type Env = { DB: D1Database }
 
-interface StoredPlayer {
+interface InternalPlayer {
   userId: number
   firstName: string
   connected: boolean
+  coins: number
+  roles: RoleName[]
+  revealed: boolean[]
+}
+
+interface GameState {
+  phase: GamePhase
+  creatorId: number | null
+  players: InternalPlayer[]
+  turnOrder: number[]
+  currentTurnIndex: number
+  deck: RoleName[]
+  log: string[]
+}
+
+function initialGameState(): GameState {
+  return {
+    phase: 'waiting_for_players',
+    creatorId: null,
+    players: [],
+    turnOrder: [],
+    currentTurnIndex: 0,
+    deck: [],
+    log: [],
+  }
+}
+
+// الگوریتم استاندارد Fisher-Yates برای شافل کردن یه آرایه
+function shuffle<T>(arr: T[]): T[] {
+  const copy = [...arr]
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+  }
+  return copy
 }
 
 export class RoomDO {
@@ -28,9 +64,11 @@ export class RoomDO {
 
     const url = new URL(request.url)
     const token = url.searchParams.get('token')
-    if (!token) return new Response('token required', { status: 401 })
+    const roomId = url.searchParams.get('roomId')
+    if (!token || !roomId) {
+      return new Response('token and roomId required', { status: 401 })
+    }
 
-    // شناسایی کاربر واقعی از روی token (دقیقاً مثل authMiddleware، ولی اینجا دستی)
     const db = getDb(this.env.DB)
     const [session] = await db.select().from(sessions).where(eq(sessions.token, token))
     if (!session) return new Response('invalid session', { status: 401 })
@@ -38,16 +76,25 @@ export class RoomDO {
     const [user] = await db.select().from(users).where(eq(users.id, session.user_id))
     if (!user) return new Response('user not found', { status: 401 })
 
+      // اگه هنوز creatorId رو نمی‌دونیم، همین الان از D1 بخون
+  const game = await this.getGame()
+  if (game.creatorId === null) {
+    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
+    if (room) {
+      game.creatorId = room.created_by
+      await this.saveGame(game)
+    }
+  }
+
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
 
-    // tag = userId، تا بعد از Hibernation هم بشه فهمید این WebSocket مال کیه
     this.state.acceptWebSocket(server, [String(user.id)])
 
-    await this.addPlayer(user.id, user.first_name)
-    //  بلافاصله وضعیت فعلی رو فقط به همین کانکشن جدید بفرست
-    await this.sendCurrentState(server)
-    await this.broadcastPlayers()
+    await this.addOrReconnectPlayer(user.id, user.first_name ?? 'بازیکن')
+
+    await this.sendStateTo(server)
+    await this.broadcastPublicState()
 
     return new Response(null, { status: 101, webSocket: client })
   }
@@ -66,71 +113,152 @@ export class RoomDO {
     }
 
     if (data.type === 'chat') {
-      await this.appendLog(`${userId}: ${data.text}`)
-      await this.broadcastLog()
+      const game = await this.getGame()
+      const player = game.players.find((p) => p.userId === userId)
+      const name = player?.firstName ?? 'ناشناس'
+      game.log.push(`${name}: ${data.text}`)
+      await this.saveGame(game)
+      await this.broadcastPublicState()
+      return
     }
+
+    if (data.type === 'start_game') {
+      await this.startGame(userId)
+      return
+    }
+
+    // بقیه‌ی انواع پیام (action, respond, block, ...) رو قدم بعد اضافه می‌کنیم
   }
 
   async webSocketClose(ws: WebSocket) {
     const tags = this.state.getTags(ws)
     const userId = Number(tags[0])
 
-    await this.setPlayerConnected(userId, false)
-    await this.broadcastPlayers()
+    const game = await this.getGame()
+    const player = game.players.find((p) => p.userId === userId)
+    if (player) player.connected = false
+    await this.saveGame(game)
+    await this.broadcastPublicState()
   }
 
-  // ---- کمکی‌ها برای کار با storage ----
+  // ---- منطق شروع بازی ----
 
-  private async getPlayers(): Promise<StoredPlayer[]> {
-    return (await this.state.storage.get<StoredPlayer[]>('players')) ?? []
+  private async startGame(requesterId: number) {
+    const game = await this.getGame()
+
+    if (game.phase !== 'waiting_for_players') {
+      return // بازی از قبل شروع شده، دوباره نمی‌شه شروعش کرد
+    }
+    if (game.creatorId !== requesterId) return
+    if (game.players.length < 2) {
+      return // بعداً پیام خطای مناسب برای کلاینت هم اضافه می‌کنیم
+    }
+
+    const deck = shuffle(buildFullDeck())
+
+    // به هر بازیکن ۲ تا کارت از بالای دسته بده
+    for (const player of game.players) {
+      player.roles = [deck.pop()!, deck.pop()!]
+      player.revealed = [false, false]
+      player.coins = 2 // سکه‌ی شروع استاندارد Coup
+    }
+
+    game.deck = deck
+    game.turnOrder = shuffle(game.players.map((p) => p.userId))
+    game.currentTurnIndex = 0
+    game.phase = 'awaiting_action'
+    game.log.push('بازی شروع شد')
+
+    await this.saveGame(game)
+    await this.broadcastPublicState()
+    await this.broadcastPrivateStates()
   }
 
-  private async addPlayer(userId: number, firstName: string) {
-    const players = await this.getPlayers()
-    const existing = players.find((p) => p.userId === userId)
+  // ---- مدیریت اتصال/قطع بازیکن‌ها ----
+
+  private async addOrReconnectPlayer(userId: number, firstName: string) {
+    const game = await this.getGame()
+    const existing = game.players.find((p) => p.userId === userId)
+
     if (existing) {
-      existing.connected = true
+      existing.connected = true // فقط وضعیت آنلاین رو آپدیت کن، کارت‌ها/سکه‌ها دست‌نخورده می‌مونن
     } else {
-      players.push({ userId, firstName, connected: true })
+      game.players.push({
+        userId,
+        firstName,
+        connected: true,
+        coins: 0,
+        roles: [],
+        revealed: [],
+      })
+      game.log.push(`${firstName} به روم پیوست`)
     }
-    await this.state.storage.put('players', players)
+
+    await this.saveGame(game)
   }
 
-  private async setPlayerConnected(userId: number, connected: boolean) {
-    const players = await this.getPlayers()
-    const player = players.find((p) => p.userId === userId)
-    if (player) player.connected = connected
-    await this.state.storage.put('players', players)
-  }
-  private async sendCurrentState(ws: WebSocket) {
-  const players = await this.getPlayers()
-  const log = (await this.state.storage.get<string[]>('log')) ?? []
+  // ---- خواندن/نوشتن state از storage ----
 
-  ws.send(JSON.stringify({ type: 'players', players }))
-  ws.send(JSON.stringify({ type: 'log', log }))
-}
-
-  private async appendLog(line: string) {
-    const log = (await this.state.storage.get<string[]>('log')) ?? []
-    log.push(line)
-    await this.state.storage.put('log', log.slice(-100)) // فقط ۱۰۰ خط آخر رو نگه دار
+  private async getGame(): Promise<GameState> {
+    return (await this.state.storage.get<GameState>('game')) ?? initialGameState()
   }
 
-  // ---- broadcast به همه‌ی کانکشن‌های فعال این روم ----
+  private async saveGame(game: GameState) {
+    await this.state.storage.put('game', game)
+  }
 
-  private async broadcastPlayers() {
-    const players = await this.getPlayers()
-    const payload = JSON.stringify({ type: 'players', players })
+  // ---- broadcast ----
+
+  private buildPublicPayload(game: GameState) {
+    return {
+      type: 'state',
+      state: {
+        phase: game.phase,
+        creatorId: game.creatorId ? String(game.creatorId) : null,
+        players: game.players.map((p) => ({
+          id: String(p.userId),
+          name: p.firstName,
+          connected: p.connected,
+          coins: p.coins,
+          roleCount: p.roles.length,
+        })),
+        turnOrder: game.turnOrder.map(String),
+        currentTurnIndex: game.currentTurnIndex,
+        deckCount: game.deck.length,
+        log: game.log.slice(-100),
+      },
+    }
+  }
+
+  private async sendStateTo(ws: WebSocket) {
+    const game = await this.getGame()
+    ws.send(JSON.stringify(this.buildPublicPayload(game)))
+
+    const tags = this.state.getTags(ws)
+    const userId = Number(tags[0])
+    const player = game.players.find((p) => p.userId === userId)
+    if (player) {
+      ws.send(JSON.stringify({ type: 'private', private: { yourRoles: player.roles, yourRevealed: player.revealed } }))
+    }
+  }
+
+  private async broadcastPublicState() {
+    const game = await this.getGame()
+    const payload = JSON.stringify(this.buildPublicPayload(game))
     for (const ws of this.state.getWebSockets()) {
       ws.send(payload)
     }
   }
 
-  private async broadcastLog() {
-    const log = (await this.state.storage.get<string[]>('log')) ?? []
-    const payload = JSON.stringify({ type: 'log', log })
+  private async broadcastPrivateStates() {
+    const game = await this.getGame()
     for (const ws of this.state.getWebSockets()) {
-      ws.send(payload)
+      const tags = this.state.getTags(ws)
+      const userId = Number(tags[0])
+      const player = game.players.find((p) => p.userId === userId)
+      if (player) {
+        ws.send(JSON.stringify({ type: 'private', private: { yourRoles: player.roles, yourRevealed: player.revealed } }))
+      }
     }
   }
 }

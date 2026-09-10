@@ -27,7 +27,9 @@ app.get('/rooms/:id/ws', (c) => {
   const roomId = c.req.param('id')
   const id = c.env.ROOM_DO.idFromName(roomId) // یه id ثابت بر اساس roomId
   const stub = c.env.ROOM_DO.get(id)
-  return stub.fetch(c.req.raw)
+  const url = new URL(c.req.url)
+  url.searchParams.set('roomId', roomId)
+  return stub.fetch(new Request(url.toString(), c.req.raw))
 })
 app.route('/rooms', roomsRoutes)
 
