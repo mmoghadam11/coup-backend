@@ -1,52 +1,21 @@
 import { eq } from 'drizzle-orm'
 import { getDb } from '../db'
-import { sessions, users } from '../db/schema'
-import { RoleName, GamePhase } from '../game-logic/types'
+import { sessions, users, rooms } from '../db/schema'
+import { GameState, initialGameState, isEliminated } from '../game-logic/state'
 import { buildFullDeck } from '../game-logic/roles'
-import { rooms } from '../db/schema'
+import { shuffle } from '../game-logic/state'
+import { buildPublicPayload } from '../game-logic/broadcast'
+import { advanceTurn } from '../game-logic/turns'
+import { applyIncome, applyCoup } from '../game-logic/actions/basic'
+import {
+  startChallengeableAction,
+  respondToAction,
+  blockAction,
+  respondToBlock,
+} from '../game-logic/actions/challengeFlow'
+import { revealCard } from '../game-logic/actions/reveal'
 
 type Env = { DB: D1Database }
-
-interface InternalPlayer {
-  userId: number
-  firstName: string
-  connected: boolean
-  coins: number
-  roles: RoleName[]
-  revealed: boolean[]
-}
-
-interface GameState {
-  phase: GamePhase
-  creatorId: number | null
-  players: InternalPlayer[]
-  turnOrder: number[]
-  currentTurnIndex: number
-  deck: RoleName[]
-  log: string[]
-}
-
-function initialGameState(): GameState {
-  return {
-    phase: 'waiting_for_players',
-    creatorId: null,
-    players: [],
-    turnOrder: [],
-    currentTurnIndex: 0,
-    deck: [],
-    log: [],
-  }
-}
-
-// الگوریتم استاندارد Fisher-Yates برای شافل کردن یه آرایه
-function shuffle<T>(arr: T[]): T[] {
-  const copy = [...arr]
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[copy[i], copy[j]] = [copy[j], copy[i]]
-  }
-  return copy
-}
 
 export class RoomDO {
   state: DurableObjectState
@@ -65,9 +34,7 @@ export class RoomDO {
     const url = new URL(request.url)
     const token = url.searchParams.get('token')
     const roomId = url.searchParams.get('roomId')
-    if (!token || !roomId) {
-      return new Response('token and roomId required', { status: 401 })
-    }
+    if (!token || !roomId) return new Response('token and roomId required', { status: 401 })
 
     const db = getDb(this.env.DB)
     const [session] = await db.select().from(sessions).where(eq(sessions.token, token))
@@ -76,34 +43,41 @@ export class RoomDO {
     const [user] = await db.select().from(users).where(eq(users.id, session.user_id))
     if (!user) return new Response('user not found', { status: 401 })
 
-      // اگه هنوز creatorId رو نمی‌دونیم، همین الان از D1 بخون
-  const game = await this.getGame()
-  if (game.creatorId === null) {
-    const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
-    if (room) {
-      game.creatorId = room.created_by
-      await this.saveGame(game)
+    const game = await this.getGame()
+    if (game.creatorId === null) {
+      const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
+      if (room) game.creatorId = room.created_by
     }
-  }
+
+    const existing = game.players.find((p) => p.userId === user.id)
+    if (existing) {
+      existing.connected = true
+    } else {
+      game.players.push({
+        userId: user.id,
+        firstName: user.first_name ?? 'بازیکن',
+        connected: true,
+        coins: 0,
+        roles: [],
+        revealed: [],
+      })
+      game.log.push(`${user.first_name} به روم پیوست`)
+    }
+    await this.saveGame(game)
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
-
     this.state.acceptWebSocket(server, [String(user.id)])
 
-    await this.addOrReconnectPlayer(user.id, user.first_name ?? 'بازیکن')
-
-    await this.sendStateTo(server)
-    await this.broadcastPublicState()
+    this.sendPrivateTo(server, game, user.id)
+    await this.broadcast()
 
     return new Response(null, { status: 101, webSocket: client })
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== 'string') return
-
-    const tags = this.state.getTags(ws)
-    const userId = Number(tags[0])
+    const userId = Number(this.state.getTags(ws)[0])
 
     let data: any
     try {
@@ -112,92 +86,88 @@ export class RoomDO {
       return
     }
 
-    if (data.type === 'chat') {
-      const game = await this.getGame()
-      const player = game.players.find((p) => p.userId === userId)
-      const name = player?.firstName ?? 'ناشناس'
-      game.log.push(`${name}: ${data.text}`)
-      await this.saveGame(game)
-      await this.broadcastPublicState()
-      return
+    const game = await this.getGame()
+
+    switch (data.type) {
+      case 'chat': {
+        const player = game.players.find((p) => p.userId === userId)
+        game.log.push(`${player?.firstName ?? 'ناشناس'}: ${data.text}`)
+        break
+      }
+      case 'start_game':
+        this.startGame(game, userId)
+        break
+      case 'action':
+        this.dispatchAction(game, userId, data.action, data.targetId)
+        break
+      case 'respond':
+        respondToAction(game, userId, data.response)
+        break
+      case 'block':
+        blockAction(game, userId)
+        break
+      case 'respond_to_block':
+        respondToBlock(game, userId, data.response)
+        break
+      case 'reveal_card':
+        revealCard(game, userId, data.roleIndex)
+        break
+      default:
+        return
     }
 
-    if (data.type === 'start_game') {
-      await this.startGame(userId)
-      return
-    }
-
-    // بقیه‌ی انواع پیام (action, respond, block, ...) رو قدم بعد اضافه می‌کنیم
+    await this.saveGame(game)
+    await this.broadcast()
   }
 
   async webSocketClose(ws: WebSocket) {
-    const tags = this.state.getTags(ws)
-    const userId = Number(tags[0])
-
+    const userId = Number(this.state.getTags(ws)[0])
     const game = await this.getGame()
     const player = game.players.find((p) => p.userId === userId)
     if (player) player.connected = false
     await this.saveGame(game)
-    await this.broadcastPublicState()
+    await this.broadcast()
   }
 
-  // ---- منطق شروع بازی ----
+  // ---- منطق‌هایی که هنوز به‌قدری خاص RoomDO هستن که جدا نکردیم ----
 
-  private async startGame(requesterId: number) {
-    const game = await this.getGame()
-
-    if (game.phase !== 'waiting_for_players') {
-      return // بازی از قبل شروع شده، دوباره نمی‌شه شروعش کرد
-    }
+  private startGame(game: GameState, requesterId: number) {
+    if (game.phase !== 'waiting_for_players') return
     if (game.creatorId !== requesterId) return
-    if (game.players.length < 2) {
-      return // بعداً پیام خطای مناسب برای کلاینت هم اضافه می‌کنیم
-    }
+    if (game.players.length < 2) return
 
     const deck = shuffle(buildFullDeck())
-
-    // به هر بازیکن ۲ تا کارت از بالای دسته بده
     for (const player of game.players) {
       player.roles = [deck.pop()!, deck.pop()!]
       player.revealed = [false, false]
-      player.coins = 2 // سکه‌ی شروع استاندارد Coup
+      player.coins = 2
     }
-
     game.deck = deck
     game.turnOrder = shuffle(game.players.map((p) => p.userId))
     game.currentTurnIndex = 0
     game.phase = 'awaiting_action'
     game.log.push('بازی شروع شد')
-
-    await this.saveGame(game)
-    await this.broadcastPublicState()
-    await this.broadcastPrivateStates()
   }
 
-  // ---- مدیریت اتصال/قطع بازیکن‌ها ----
+  private dispatchAction(game: GameState, userId: number, action: string, targetId?: string) {
+    if (game.phase !== 'awaiting_action') return
+    if (game.turnOrder[game.currentTurnIndex] !== userId) return
 
-  private async addOrReconnectPlayer(userId: number, firstName: string) {
-    const game = await this.getGame()
-    const existing = game.players.find((p) => p.userId === userId)
-
-    if (existing) {
-      existing.connected = true // فقط وضعیت آنلاین رو آپدیت کن، کارت‌ها/سکه‌ها دست‌نخورده می‌مونن
-    } else {
-      game.players.push({
-        userId,
-        firstName,
-        connected: true,
-        coins: 0,
-        roles: [],
-        revealed: [],
-      })
-      game.log.push(`${firstName} به روم پیوست`)
+    if (action === 'income') {
+      applyIncome(game, userId)
+      advanceTurn(game)
+      return
     }
-
-    await this.saveGame(game)
+    if (action === 'coup') {
+      if (!targetId) return
+      applyCoup(game, userId, Number(targetId))
+      return
+    }
+    // بقیه (foreign_aid, tax, assassinate, steal, و بعداً exchange/contessa)
+    startChallengeableAction(game, userId, action as any, targetId)
   }
 
-  // ---- خواندن/نوشتن state از storage ----
+  // ---- storage/broadcast helpers ----
 
   private async getGame(): Promise<GameState> {
     return (await this.state.storage.get<GameState>('game')) ?? initialGameState()
@@ -207,58 +177,20 @@ export class RoomDO {
     await this.state.storage.put('game', game)
   }
 
-  // ---- broadcast ----
-
-  private buildPublicPayload(game: GameState) {
-    return {
-      type: 'state',
-      state: {
-        phase: game.phase,
-        creatorId: game.creatorId ? String(game.creatorId) : null,
-        players: game.players.map((p) => ({
-          id: String(p.userId),
-          name: p.firstName,
-          connected: p.connected,
-          coins: p.coins,
-          roleCount: p.roles.length,
-        })),
-        turnOrder: game.turnOrder.map(String),
-        currentTurnIndex: game.currentTurnIndex,
-        deckCount: game.deck.length,
-        log: game.log.slice(-100),
-      },
-    }
-  }
-
-  private async sendStateTo(ws: WebSocket) {
-    const game = await this.getGame()
-    ws.send(JSON.stringify(this.buildPublicPayload(game)))
-
-    const tags = this.state.getTags(ws)
-    const userId = Number(tags[0])
+  private sendPrivateTo(ws: WebSocket, game: GameState, userId: number) {
     const player = game.players.find((p) => p.userId === userId)
     if (player) {
       ws.send(JSON.stringify({ type: 'private', private: { yourRoles: player.roles, yourRevealed: player.revealed } }))
     }
   }
 
-  private async broadcastPublicState() {
+  private async broadcast() {
     const game = await this.getGame()
-    const payload = JSON.stringify(this.buildPublicPayload(game))
+    const publicPayload = JSON.stringify(buildPublicPayload(game))
     for (const ws of this.state.getWebSockets()) {
-      ws.send(payload)
-    }
-  }
-
-  private async broadcastPrivateStates() {
-    const game = await this.getGame()
-    for (const ws of this.state.getWebSockets()) {
-      const tags = this.state.getTags(ws)
-      const userId = Number(tags[0])
-      const player = game.players.find((p) => p.userId === userId)
-      if (player) {
-        ws.send(JSON.stringify({ type: 'private', private: { yourRoles: player.roles, yourRevealed: player.revealed } }))
-      }
+      ws.send(publicPayload)
+      const userId = Number(this.state.getTags(ws)[0])
+      this.sendPrivateTo(ws, game, userId)
     }
   }
 }
