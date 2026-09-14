@@ -16,3 +16,22 @@ export function dealNewGame(game: GameState) {
   game.pendingAction = null
   game.revealPending = null
 }
+// روم رو به حالت "منتظر شروع" برمی‌گردونه (بازیکن‌ها می‌مونن، ولی کارت/سکه صفر می‌شه)
+export function resetToWaiting(game: GameState) {
+  for (const player of game.players) {
+    player.roles = []
+    player.revealed = []
+    player.coins = 0
+  }
+  game.deck = []
+  game.turnOrder = []
+  game.currentTurnIndex = 0
+  game.phase = 'waiting_for_players'
+  game.winnerId = null
+  game.pendingAction = null
+  game.revealPending = null
+}
+export function forceResetGame(game: GameState) {
+  dealNewGame(game)
+  game.log.push('⚠️ بازی توسط سازنده ریست شد')
+}

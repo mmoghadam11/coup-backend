@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db'
-import { sessions, users, rooms, roomPlayers  } from '../db/schema'
+import { sessions, users, rooms, roomPlayers } from '../db/schema'
 import { GameState, initialGameState, isEliminated } from '../game-logic/state'
 import { buildFullDeck } from '../game-logic/roles'
 import { shuffle } from '../game-logic/state'
@@ -14,7 +14,7 @@ import {
   respondToBlock,
 } from '../game-logic/actions/challengeFlow'
 import { revealCard } from '../game-logic/actions/reveal'
-import { dealNewGame } from '../game-logic/lifecycle'
+import { dealNewGame, forceResetGame, resetToWaiting } from '../game-logic/lifecycle'
 
 type Env = { DB: D1Database }
 
@@ -45,9 +45,12 @@ export class RoomDO {
     if (!user) return new Response('user not found', { status: 401 })
 
     const game = await this.getGame()
-    if (game.creatorId === null) {
+    if (!game.creatorId) {
       const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
-      if (room) game.creatorId = room.created_by
+      if (room) {
+        game.creatorId = room.created_by
+        game.roomName = room.name
+      }
     }
     game.roomId = roomId
 
@@ -97,7 +100,7 @@ export class RoomDO {
         break
       }
       case 'start_game':
-        this.startGame(game, userId)
+        await this.startGame(game, userId)
         break
       case 'action':
         this.dispatchAction(game, userId, data.action, data.targetId)
@@ -111,14 +114,22 @@ export class RoomDO {
       case 'respond_to_block':
         respondToBlock(game, userId, data.response)
         break
-      case 'reveal_card':
-        revealCard(game, userId, data.roleIndex)
+      case 'reveal_card': {
+        const result = revealCard(game, userId, data.roleIndex)
+        if (result.gameJustEnded && game.roomId) {
+          const db = getDb(this.env.DB)
+          await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+        }
         break
-        case 'restart_game':
-    this.restartGame(game, userId)
-    break
+      }
+      case 'restart_game':
+        await this.restartGame(game, userId, data.reopenForJoining)
+        break
       case 'leave_room':
         await this.leaveRoom(game, userId)
+        break
+      case 'force_reset':
+        this.forceReset(game, userId)
         break
       case 'close_room':
         await this.closeRoom(game, userId)
@@ -142,22 +153,17 @@ export class RoomDO {
 
   // ---- منطق‌هایی که هنوز به‌قدری خاص RoomDO هستن که جدا نکردیم ----
 
-  private startGame(game: GameState, requesterId: number) {
+  private async startGame(game: GameState, requesterId: number) {
     if (game.phase !== 'waiting_for_players') return
     if (game.creatorId !== requesterId) return
     if (game.players.length < 2) return
 
-    const deck = shuffle(buildFullDeck())
-    for (const player of game.players) {
-      player.roles = [deck.pop()!, deck.pop()!]
-      player.revealed = [false, false]
-      player.coins = 2
-    }
-    game.deck = deck
-    game.turnOrder = shuffle(game.players.map((p) => p.userId))
-    game.currentTurnIndex = 0
-    game.phase = 'awaiting_action'
+    dealNewGame(game)
     game.log.push('بازی شروع شد')
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.update(rooms).set({ status: 'playing' }).where(eq(rooms.id, game.roomId))
+    }
   }
 
   private dispatchAction(game: GameState, userId: number, action: string, targetId?: string) {
@@ -205,42 +211,68 @@ export class RoomDO {
     }
   }
 
-  private restartGame(game: GameState, requesterId: number) {
+  private async restartGame(game: GameState, requesterId: number, reopenForJoining: boolean) {
   if (game.phase !== 'game_over') return
   if (game.creatorId !== requesterId) return
-  dealNewGame(game)
-  game.log.push('بازی مجدد شروع شد')
-}
 
-private async leaveRoom(game: GameState, userId: number) {
-  if (game.phase !== 'game_over') return // فقط بعد از پایان بازی می‌شه خارج شد
-  if (!game.roomId) return
-
-  const db = getDb(this.env.DB)
-  await db
-    .delete(roomPlayers)
-    .where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
-  await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
-
-  const player = game.players.find((p) => p.userId === userId)
-  game.players = game.players.filter((p) => p.userId !== userId)
-  game.turnOrder = game.turnOrder.filter((id) => id !== userId)
-  game.log.push(`${player?.firstName ?? 'یک بازیکن'} از روم خارج شد`)
-}
-
-private async closeRoom(game: GameState, requesterId: number) {
-  if (game.creatorId !== requesterId) return
-  if (!game.roomId) return
-
-  const db = getDb(this.env.DB)
-  await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-
-  for (const player of game.players) {
-    await db.update(users).set({ active_room_id: null }).where(eq(users.id, player.userId))
+  if (reopenForJoining) {
+    resetToWaiting(game)
+    game.log.push('روم دوباره برای ورود بازیکن جدید باز شد')
+  } else {
+    dealNewGame(game)
+    game.log.push('بازی مجدد با همین بازیکن‌ها شروع شد')
   }
-  await db.delete(roomPlayers).where(eq(roomPlayers.room_id, game.roomId))
 
-  game.phase = 'room_closed'
-  game.log.push('روم توسط سازنده بسته شد')
+  if (game.roomId) {
+    const db = getDb(this.env.DB)
+    await db
+      .update(rooms)
+      .set({ status: reopenForJoining ? 'waiting' : 'playing' })
+      .where(eq(rooms.id, game.roomId))
+  }
+}
+
+  private async leaveRoom(game: GameState, userId: number) {
+    if (game.phase !== 'game_over') return // فقط بعد از پایان بازی می‌شه خارج شد
+    if (!game.roomId) return
+
+    const db = getDb(this.env.DB)
+    await db
+      .delete(roomPlayers)
+      .where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+    await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+
+    const player = game.players.find((p) => p.userId === userId)
+    game.players = game.players.filter((p) => p.userId !== userId)
+    game.turnOrder = game.turnOrder.filter((id) => id !== userId)
+    game.log.push(`${player?.firstName ?? 'یک بازیکن'} از روم خارج شد`)
+  }
+
+  private async closeRoom(game: GameState, requesterId: number) {
+    if (game.creatorId !== requesterId) return
+    if (!game.roomId) return
+
+    const db = getDb(this.env.DB)
+    await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+
+    for (const player of game.players) {
+      await db.update(users).set({ active_room_id: null }).where(eq(users.id, player.userId))
+    }
+    await db.delete(roomPlayers).where(eq(roomPlayers.room_id, game.roomId))
+
+    game.phase = 'room_closed'
+    game.log.push('روم توسط سازنده بسته شد')
+  }
+  private async forceReset(game: GameState, requesterId: number) {
+  if (game.creatorId !== requesterId) return
+  if (game.phase === 'room_closed') return
+  if (game.players.length < 2) return
+
+  forceResetGame(game)
+
+  if (game.roomId) {
+    const db = getDb(this.env.DB)
+    await db.update(rooms).set({ status: 'playing' }).where(eq(rooms.id, game.roomId))
+  }
 }
 }

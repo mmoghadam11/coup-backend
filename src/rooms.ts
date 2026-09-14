@@ -73,9 +73,10 @@ roomsRoutes.post('/:id/join', async (c) => {
   const [room] = await db
     .select()
     .from(rooms)
-    .where(and(eq(rooms.id, roomId), ne(rooms.status, 'finished')))
+    .where(and(eq(rooms.id, roomId), eq(rooms.status, 'waiting')))
 
-  if (!room) return c.json({ error: 'room not found or finished' }, 404)
+  if (!room) return c.json({ error: 'room not found or already started' }, 404)
+
 
   await db.batch([
     db.insert(roomPlayers).values({ room_id: roomId, user_id: userId }),

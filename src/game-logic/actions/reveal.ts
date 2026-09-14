@@ -2,11 +2,15 @@ import { GameState, isEliminated } from '../state'
 import { advanceTurn } from '../turns'
 import { resolvePendingActionEffect } from './challengeFlow'
 
-export function revealCard(game: GameState, userId: number, roleIndex: number) {
-  if (!game.revealPending || game.revealPending.playerId !== userId) return
+export function revealCard(game: GameState, userId: number, roleIndex: number): { gameJustEnded: boolean } {
+  if (!game.revealPending || game.revealPending.playerId !== userId) {
+    return { gameJustEnded: false }
+  }
 
   const player = game.players.find((p) => p.userId === userId)
-  if (!player || player.revealed[roleIndex]) return
+  if (!player || player.revealed[roleIndex]) {
+    return { gameJustEnded: false }
+  }
 
   player.revealed[roleIndex] = true
   game.log.push(`${player.firstName} یکی از کارت‌هاش رو کور کرد`)
@@ -21,13 +25,14 @@ export function revealCard(game: GameState, userId: number, roleIndex: number) {
     game.phase = 'game_over'
     game.winnerId = alivePlayers[0].userId
     game.log.push(`${alivePlayers[0].firstName} برنده‌ی بازی شد!`)
-    return
+    return { gameJustEnded: true } // این تغییر کرد
   }
 
   if (game.pendingAction) {
     resolvePendingActionEffect(game)
-    if (game.revealPending) return // اگه اثر اکشن خودش یه reveal جدید لازم داره (مثلاً assassinate)
+    return { gameJustEnded: false }
   }
 
   advanceTurn(game)
+  return { gameJustEnded: false }
 }

@@ -7,12 +7,14 @@ export function buildPublicPayload(game: GameState) {
     state: {
       phase: game.phase,
       creatorId: game.creatorId ? String(game.creatorId) : null,
+      roomName: game.roomName,
       players: game.players.map((p) => ({
         id: String(p.userId),
         name: p.firstName,
         connected: p.connected,
         coins: p.coins,
         roleCount: p.roles.length - p.revealed.filter((r) => r).length,
+        revealedRoles: p.roles.filter((_, i) => p.revealed[i]),
         isAlive: !isEliminated(p),
       })),
       turnOrder: game.turnOrder.map(String),

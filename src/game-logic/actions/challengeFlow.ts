@@ -1,6 +1,7 @@
 import { GameState, shuffle } from '../state'
 import { ActionType, RoleName } from '../types'
 import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost } from '../roles'
+import { advanceTurn } from '../turns'
 
 export function startChallengeableAction(
   game: GameState,
@@ -173,4 +174,7 @@ export function resolvePendingActionEffect(game: GameState) {
   }
 
   game.pendingAction = null
+  if (!game.revealPending) {
+    advanceTurn(game)
+  }
 }

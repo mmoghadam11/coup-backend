@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { authRoutes } from './auth'
 import { roomsRoutes } from './rooms'
+import { adminRoutes } from './admin'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -15,7 +16,7 @@ const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', cors({
   origin: ['https://telegram-coup-frontend.pages.dev', 'http://localhost:3000'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowMethods: ['GET', 'POST', 'PUT','PATCH' , 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }))
 
@@ -31,6 +32,7 @@ app.get('/rooms/:id/ws', (c) => {
   url.searchParams.set('roomId', roomId)
   return stub.fetch(new Request(url.toString(), c.req.raw))
 })
+app.route('/admin', adminRoutes)
 app.route('/rooms', roomsRoutes)
 
 export default app
