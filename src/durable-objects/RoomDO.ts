@@ -15,6 +15,7 @@ import {
 } from '../game-logic/actions/challengeFlow'
 import { revealCard } from '../game-logic/actions/reveal'
 import { dealNewGame, forceResetGame, resetToWaiting } from '../game-logic/lifecycle'
+import { confirmContessaSelection, confirmExchangeSelection } from '../game-logic/actions/selection'
 
 type Env = { DB: D1Database }
 
@@ -122,6 +123,15 @@ export class RoomDO {
         }
         break
       }
+      case 'exchange_select':
+        confirmExchangeSelection(game, userId, data.keepIndexes)
+        if (!game.selectionPending) advanceTurn(game)
+        break
+      case 'contessa_self_select':
+      case 'contessa_other_select':
+        confirmContessaSelection(game, userId, data.roleIndex)
+        if (!game.selectionPending) advanceTurn(game)
+        break
       case 'restart_game':
         await this.restartGame(game, userId, data.reopenForJoining)
         break
@@ -195,11 +205,18 @@ export class RoomDO {
   }
 
   private sendPrivateTo(ws: WebSocket, game: GameState, userId: number) {
-    const player = game.players.find((p) => p.userId === userId)
-    if (player) {
-      ws.send(JSON.stringify({ type: 'private', private: { yourRoles: player.roles, yourRevealed: player.revealed } }))
-    }
+  const player = game.players.find((p) => p.userId === userId)
+  if (!player) return
+  const payload: any = {
+    type: 'private',
+    private: { yourRoles: player.roles, yourRevealed: player.revealed },
   }
+  if (game.selectionPending?.mode === 'exchange' && game.selectionPending.playerId === userId) {
+    payload.private.exchangePool = game.selectionPending.pool
+    payload.private.exchangeKeepCount = game.selectionPending.keepCount
+  }
+  ws.send(JSON.stringify(payload))
+}
 
   private async broadcast() {
     const game = await this.getGame()
@@ -212,25 +229,25 @@ export class RoomDO {
   }
 
   private async restartGame(game: GameState, requesterId: number, reopenForJoining: boolean) {
-  if (game.phase !== 'game_over') return
-  if (game.creatorId !== requesterId) return
+    if (game.phase !== 'game_over') return
+    if (game.creatorId !== requesterId) return
 
-  if (reopenForJoining) {
-    resetToWaiting(game)
-    game.log.push('روم دوباره برای ورود بازیکن جدید باز شد')
-  } else {
-    dealNewGame(game)
-    game.log.push('بازی مجدد با همین بازیکن‌ها شروع شد')
-  }
+    if (reopenForJoining) {
+      resetToWaiting(game)
+      game.log.push('روم دوباره برای ورود بازیکن جدید باز شد')
+    } else {
+      dealNewGame(game)
+      game.log.push('بازی مجدد با همین بازیکن‌ها شروع شد')
+    }
 
-  if (game.roomId) {
-    const db = getDb(this.env.DB)
-    await db
-      .update(rooms)
-      .set({ status: reopenForJoining ? 'waiting' : 'playing' })
-      .where(eq(rooms.id, game.roomId))
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db
+        .update(rooms)
+        .set({ status: reopenForJoining ? 'waiting' : 'playing' })
+        .where(eq(rooms.id, game.roomId))
+    }
   }
-}
 
   private async leaveRoom(game: GameState, userId: number) {
     if (game.phase !== 'game_over') return // فقط بعد از پایان بازی می‌شه خارج شد
@@ -264,15 +281,15 @@ export class RoomDO {
     game.log.push('روم توسط سازنده بسته شد')
   }
   private async forceReset(game: GameState, requesterId: number) {
-  if (game.creatorId !== requesterId) return
-  if (game.phase === 'room_closed') return
-  if (game.players.length < 2) return
+    if (game.creatorId !== requesterId) return
+    if (game.phase === 'room_closed') return
+    if (game.players.length < 2) return
 
-  forceResetGame(game)
+    forceResetGame(game)
 
-  if (game.roomId) {
-    const db = getDb(this.env.DB)
-    await db.update(rooms).set({ status: 'playing' }).where(eq(rooms.id, game.roomId))
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.update(rooms).set({ status: 'playing' }).where(eq(rooms.id, game.roomId))
+    }
   }
-}
 }

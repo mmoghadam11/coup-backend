@@ -2,6 +2,7 @@ import { GameState, shuffle } from '../state'
 import { ActionType, RoleName } from '../types'
 import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost } from '../roles'
 import { advanceTurn } from '../turns'
+import { startContessaSelection, startExchangeSelection } from './selection'
 
 export function startChallengeableAction(
   game: GameState,
@@ -171,10 +172,19 @@ export function resolvePendingActionEffect(game: GameState) {
     case 'assassinate':
       if (target) game.revealPending = { playerId: target.userId, reason: 'assassinated' }
       break
+      case 'exchange':
+      startExchangeSelection(game, actor.userId) // این خط اضافه شد
+      break
+    case 'contessa_self':
+      startContessaSelection(game, actor.userId) // این خط اضافه شد
+      break
+    case 'contessa_other':
+      if (target) startContessaSelection(game, target.userId) // این خط اضافه شد
+      break
   }
 
   game.pendingAction = null
-  if (!game.revealPending) {
+  if (!game.revealPending && !game.selectionPending) { // شرط selectionPending اضافه شد
     advanceTurn(game)
   }
 }

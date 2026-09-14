@@ -14,6 +14,12 @@ export interface RevealPending {
   reason: string
 }
 
+export interface SelectionPending {
+  playerId: number
+  mode: 'exchange' | 'contessa'
+  pool?: RoleName[]      // فقط برای exchange: کارت‌های فعلی + ۲ کارت جدید
+  keepCount?: number     // فقط برای exchange: چندتا باید نگه داره
+}
 export interface GameState {
   roomId: string | null
   roomName: string | null
@@ -26,6 +32,7 @@ export interface GameState {
   log: string[]
   pendingAction: PendingAction | null
   revealPending: RevealPending | null
+  selectionPending: SelectionPending | null
   winnerId: number | null
 }
 
@@ -42,6 +49,7 @@ export function initialGameState(): GameState {
     log: [],
     pendingAction: null,
     revealPending: null,
+    selectionPending: null,
     winnerId: null,
   }
 }

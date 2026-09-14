@@ -25,11 +25,14 @@ export function revealCard(game: GameState, userId: number, roleIndex: number): 
     game.phase = 'game_over'
     game.winnerId = alivePlayers[0].userId
     game.log.push(`${alivePlayers[0].firstName} برنده‌ی بازی شد!`)
-    return { gameJustEnded: true } // این تغییر کرد
+    return { gameJustEnded: true }
   }
 
   if (game.pendingAction) {
     resolvePendingActionEffect(game)
+    if (game.revealPending || game.selectionPending) {
+      return { gameJustEnded: false }
+    }
     return { gameJustEnded: false }
   }
 

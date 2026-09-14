@@ -25,6 +25,9 @@ export function buildPublicPayload(game: GameState) {
       revealPending: game.revealPending
         ? { playerId: String(game.revealPending.playerId), reason: game.revealPending.reason }
         : null,
+      selectionPending: game.selectionPending
+        ? { playerId: String(game.selectionPending.playerId), mode: game.selectionPending.mode }
+        : null,
       winnerId: game.winnerId ? String(game.winnerId) : null,
     },
   }
