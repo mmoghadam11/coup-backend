@@ -92,6 +92,7 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   if (allResponded) {
     game.log.push('بلاک تایید شد، اکشن خنثی شد')
     game.pendingAction = null
+    advanceTurn(game)
   }
 }
 
