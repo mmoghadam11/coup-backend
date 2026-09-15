@@ -14,6 +14,7 @@ export function applyCoup(game: GameState, actorId: number, targetId: number) {
   if (actor.coins < actionCost('coup')) return
 
   actor.coins -= actionCost('coup')
+  actor.stats.kills += 1
   game.log.push(`${actor.firstName} کودتا کرد`)
   game.revealPending = { playerId: targetId, reason: 'coup' }
 }

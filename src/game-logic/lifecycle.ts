@@ -1,4 +1,4 @@
-import { GameState, shuffle } from './state'
+import { GameState, shuffle , emptyStats} from './state'
 import { buildFullDeck } from './roles'
 
 export function dealNewGame(game: GameState) {
@@ -7,6 +7,7 @@ export function dealNewGame(game: GameState) {
     player.roles = [deck.pop()!, deck.pop()!]
     player.revealed = [false, false]
     player.coins = 2
+    player.stats = emptyStats()
   }
   game.deck = deck
   game.turnOrder = shuffle(game.players.map((p) => p.userId))
@@ -22,6 +23,7 @@ export function resetToWaiting(game: GameState) {
     player.roles = []
     player.revealed = []
     player.coins = 0
+    player.stats = emptyStats()
   }
   game.deck = []
   game.turnOrder = []

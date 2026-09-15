@@ -9,12 +9,14 @@ export function startChallengeableAction(
   actorId: number,
   action: ActionType,
   targetId?: string
-) {
+): { error?: string } {
   const actor = game.players.find((p) => p.userId === actorId)
-  if (!actor) return
+  if (!actor) return { error: 'بازیکن پیدا نشد' }
 
   const cost = actionCost(action)
-  if (cost > 0 && actor.coins < cost) return
+  if (cost > 0 && actor.coins < cost) {
+    return { error: `سکه کافی ندارید (نیاز به ${cost} سکه)` }
+  }
 
   const claimedRole = ACTION_TO_ROLE[action]
   const others = game.players.filter((p) => p.userId !== actorId)
@@ -33,6 +35,7 @@ export function startChallengeableAction(
   game.log.push(`${actor.firstName} اکشن ${action} رو اعلام کرد`)
 
   if (cost > 0) actor.coins -= cost
+  return {}
 }
 
 export function respondToAction(game: GameState, userId: number, response: 'allow' | 'challenge') {
@@ -40,7 +43,6 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
   if (!pending || game.phase !== 'awaiting_response') return
   if (!pending.awaitingResponseFrom.includes(String(userId))) return
   if (response === 'challenge' && !pending.claimedRole) return
-  
 
   pending.responses[String(userId)] = response
 
@@ -51,6 +53,15 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
 
   const allResponded = pending.awaitingResponseFrom.every((id) => pending.responses[id])
   if (allResponded) {
+    // هیچ‌کس چالش نزد؛ اگه ادعا دروغ بوده، این یه بلوف موفقه — قبل از resolve، همینجا چک می‌کنیم
+    // (چون بعد از resolve، ممکنه دیگه اطلاعات دقیق نداشته باشیم)
+    if (pending.claimedRole) {
+      const actor = game.players.find((p) => p.userId === Number(pending.actorId))
+      const actuallyHasRole = actor?.roles.some((r, i) => r === pending.claimedRole && !actor.revealed[i])
+      if (actor && !actuallyHasRole) {
+        actor.stats.successfulBluffs += 1
+      }
+    }
     resolvePendingActionEffect(game)
   }
 }
@@ -90,14 +101,21 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   const allResponded = eligible.every((id) => pending.blockChallengeResponses![id])
 
   if (allResponded) {
+    // بلاک تایید شد، بدون چالش — اگه ادعای بلاک دروغ بوده، یه بلوف موفقه
+    const blocker = game.players.find((p) => p.userId === Number(pending.blockedBy!.playerId))
+    const actuallyHasRole = blocker?.roles.some(
+      (r, i) => r === pending.blockedBy!.claimedRole && !blocker.revealed[i]
+    )
+    if (blocker && !actuallyHasRole) {
+      blocker.stats.successfulBluffs += 1
+    }
+
     game.log.push('بلاک تایید شد، اکشن خنثی شد')
     game.pendingAction = null
     advanceTurn(game)
   }
 }
 
-// context = 'action' یعنی داریم به خودِ ادعای اکشن challenge می‌زنیم
-// context = 'block' یعنی داریم به ادعای بلاک‌کننده challenge می‌زنیم
 function resolveChallenge(
   game: GameState,
   claimerId: string,
@@ -106,6 +124,7 @@ function resolveChallenge(
   challengerId: string
 ) {
   const claimer = game.players.find((p) => p.userId === Number(claimerId))
+  const challenger = game.players.find((p) => p.userId === Number(challengerId))
   if (!claimer) return
 
   const idx = claimer.roles.findIndex((r, i) => r === claimedRole && !claimer.revealed[i])
@@ -118,22 +137,21 @@ function resolveChallenge(
     claimer.roles[idx] = game.deck.pop()!
     game.log.push('ادعا درست بود؛ کارت جدید گرفت')
 
-    // چالش‌کننده باخته، باید یه کارت رو از دست بده
+    if (challenger) challenger.stats.wrongChallenges += 1   // این خط اضافه شد
+
     game.revealPending = { playerId: Number(challengerId), reason: 'lost_challenge' }
 
-    // اگه روی یه بلاک چالش زده بودن و بلاک درست از آب دراومد، خودِ اکشن اصلی کنسل می‌شه
     if (context === 'block') game.pendingAction = null
-    // اگه context === 'action' بود، pendingAction دست‌نخورده می‌مونه تا بعد از reveal، اثرش اجرا بشه
   } else {
-    // ادعا دروغ بود: claimer باید یه کارت رو از دست بده
     game.log.push('ادعا دروغ بود!')
+    claimer.stats.caughtBluffs += 1                          // این خط اضافه شد
+    if (challenger) challenger.stats.correctChallenges += 1  // این خط اضافه شد
+
     game.revealPending = { playerId: Number(claimerId), reason: 'lost_challenge' }
 
     if (context === 'action') {
-      // خودِ اکشن دروغ بود، کلاً کنسل می‌شه
       game.pendingAction = null
     } else {
-      // بلاک دروغ بود؛ بلاک باطل می‌شه ولی اکشن اصلی باید بعد از reveal اجرا بشه
       if (game.pendingAction) {
         game.pendingAction.blockedBy = undefined
         game.pendingAction.blockChallengeResponses = undefined
@@ -167,25 +185,29 @@ export function resolvePendingActionEffect(game: GameState) {
         const amount = Math.min(2, target.coins)
         target.coins -= amount
         actor.coins += amount
+        actor.stats.successfulSteals += 1   // این خط اضافه شد
         game.log.push(`${actor.firstName} از هدف دزدی کرد`)
       }
       break
     case 'assassinate':
-      if (target) game.revealPending = { playerId: target.userId, reason: 'assassinated' }
+      if (target) {
+        actor.stats.kills += 1   // این خط اضافه شد
+        game.revealPending = { playerId: target.userId, reason: 'assassinated' }
+      }
       break
-      case 'exchange':
-      startExchangeSelection(game, actor.userId) // این خط اضافه شد
+    case 'exchange':
+      startExchangeSelection(game, actor.userId)
       break
     case 'contessa_self':
-      startContessaSelection(game, actor.userId) // این خط اضافه شد
+      startContessaSelection(game, actor.userId)
       break
     case 'contessa_other':
-      if (target) startContessaSelection(game, target.userId) // این خط اضافه شد
+      if (target) startContessaSelection(game, target.userId)
       break
   }
 
   game.pendingAction = null
-  if (!game.revealPending && !game.selectionPending) { // شرط selectionPending اضافه شد
+  if (!game.revealPending && !game.selectionPending) {
     advanceTurn(game)
   }
 }

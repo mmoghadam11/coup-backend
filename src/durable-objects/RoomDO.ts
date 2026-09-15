@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db'
 import { sessions, users, rooms, roomPlayers } from '../db/schema'
-import { GameState, initialGameState, isEliminated } from '../game-logic/state'
+import { emptyStats, GameState, initialGameState, isEliminated } from '../game-logic/state'
 import { buildFullDeck } from '../game-logic/roles'
 import { shuffle } from '../game-logic/state'
 import { buildPublicPayload } from '../game-logic/broadcast'
@@ -66,6 +66,7 @@ export class RoomDO {
         coins: 0,
         roles: [],
         revealed: [],
+        stats: emptyStats(),
       })
       game.log.push(`${user.first_name} به روم پیوست`)
     }
