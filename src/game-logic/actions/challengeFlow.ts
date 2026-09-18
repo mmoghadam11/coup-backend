@@ -47,14 +47,12 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
   pending.responses[String(userId)] = response
 
   if (response === 'challenge') {
-    resolveChallenge(game, pending.actorId, pending.claimedRole!, 'action', String(userId))
+    initiateChallenge(game, pending.actorId, pending.claimedRole!, 'action', String(userId))
     return
   }
 
   const allResponded = pending.awaitingResponseFrom.every((id) => pending.responses[id])
   if (allResponded) {
-    // هیچ‌کس چالش نزد؛ اگه ادعا دروغ بوده، این یه بلوف موفقه — قبل از resolve، همینجا چک می‌کنیم
-    // (چون بعد از resolve، ممکنه دیگه اطلاعات دقیق نداشته باشیم)
     if (pending.claimedRole) {
       const actor = game.players.find((p) => p.userId === Number(pending.actorId))
       const actuallyHasRole = actor?.roles.some((r, i) => r === pending.claimedRole && !actor.revealed[i])
@@ -66,18 +64,19 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
   }
 }
 
-export function blockAction(game: GameState, userId: number) {
+// اکنون claimedRole رو از خودِ کلاینت می‌گیریم (چون برای steal ممکنه فرمانده یا سفیر ادعا بشه)
+export function blockAction(game: GameState, userId: number, claimedRole: RoleName) {
   const pending = game.pendingAction
   if (!pending || game.phase !== 'awaiting_response') return
 
   const blockableRoles = BLOCKING_ROLES[pending.action]
-  if (!blockableRoles) return
+  if (!blockableRoles || !blockableRoles.includes(claimedRole)) return
 
   if ((pending.action === 'assassinate' || pending.action === 'steal') && pending.targetId !== String(userId)) {
     return
   }
 
-  pending.blockedBy = { playerId: String(userId), claimedRole: blockableRoles[0] }
+  pending.blockedBy = { playerId: String(userId), claimedRole }
   pending.blockChallengeResponses = {}
   game.phase = 'awaiting_block_response'
   game.log.push('یکی از بازیکنان اکشن رو بلاک کرد')
@@ -91,7 +90,7 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   pending.blockChallengeResponses![String(userId)] = response
 
   if (response === 'challenge') {
-    resolveChallenge(game, pending.blockedBy.playerId, pending.blockedBy.claimedRole, 'block', String(userId))
+    initiateChallenge(game, pending.blockedBy.playerId, pending.blockedBy.claimedRole, 'block', String(userId))
     return
   }
 
@@ -101,7 +100,6 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   const allResponded = eligible.every((id) => pending.blockChallengeResponses![id])
 
   if (allResponded) {
-    // بلاک تایید شد، بدون چالش — اگه ادعای بلاک دروغ بوده، یه بلوف موفقه
     const blocker = game.players.find((p) => p.userId === Number(pending.blockedBy!.playerId))
     const actuallyHasRole = blocker?.roles.some(
       (r, i) => r === pending.blockedBy!.claimedRole && !blocker.revealed[i]
@@ -116,6 +114,24 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   }
 }
 
+// به‌جای چک خودکار، فقط منتظر می‌مونیم ادعاکننده خودش یه کارت برای اثبات انتخاب کنه
+function initiateChallenge(
+  game: GameState,
+  claimerId: string,
+  claimedRole: RoleName,
+  context: 'action' | 'block',
+  challengerId: string
+) {
+  game.provePending = {
+    playerId: Number(claimerId),
+    claimedRole,
+    context,
+    challengerId: Number(challengerId),
+  }
+  game.phase = 'proving_claim'
+  game.log.push('چالش زده شد؛ منتظر اثبات هستیم')
+}
+//برای مدل اتوماتیک
 function resolveChallenge(
   game: GameState,
   claimerId: string,
@@ -159,7 +175,6 @@ function resolveChallenge(
     }
   }
 }
-
 export function resolvePendingActionEffect(game: GameState) {
   const pending = game.pendingAction
   if (!pending) return
@@ -185,13 +200,13 @@ export function resolvePendingActionEffect(game: GameState) {
         const amount = Math.min(2, target.coins)
         target.coins -= amount
         actor.coins += amount
-        actor.stats.successfulSteals += 1   // این خط اضافه شد
+        actor.stats.successfulSteals += 1
         game.log.push(`${actor.firstName} از هدف دزدی کرد`)
       }
       break
     case 'assassinate':
       if (target) {
-        actor.stats.kills += 1   // این خط اضافه شد
+        actor.stats.kills += 1   // فقط قاتل
         game.revealPending = { playerId: target.userId, reason: 'assassinated' }
       }
       break

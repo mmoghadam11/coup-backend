@@ -1,13 +1,12 @@
-import { GameState } from './state'
-import { isEliminated } from './state'
+import { GameState, isEliminated } from './state'
 
 export function buildPublicPayload(game: GameState) {
   return {
     type: 'state',
     state: {
       phase: game.phase,
-      creatorId: game.creatorId ? String(game.creatorId) : null,
       roomName: game.roomName,
+      creatorId: game.creatorId ? String(game.creatorId) : null,
       players: game.players.map((p) => ({
         id: String(p.userId),
         name: p.firstName,
@@ -16,6 +15,7 @@ export function buildPublicPayload(game: GameState) {
         roleCount: p.roles.length - p.revealed.filter((r) => r).length,
         revealedRoles: p.roles.filter((_, i) => p.revealed[i]),
         isAlive: !isEliminated(p),
+        stats: p.stats,
       })),
       turnOrder: game.turnOrder.map(String),
       currentTurnIndex: game.currentTurnIndex,
@@ -25,8 +25,20 @@ export function buildPublicPayload(game: GameState) {
       revealPending: game.revealPending
         ? { playerId: String(game.revealPending.playerId), reason: game.revealPending.reason }
         : null,
+      provePending: game.provePending
+        ? { playerId: String(game.provePending.playerId), claimedRole: game.provePending.claimedRole }
+        : null,
       selectionPending: game.selectionPending
         ? { playerId: String(game.selectionPending.playerId), mode: game.selectionPending.mode }
+        : null,
+      restartVote: game.restartVote
+        ? {
+            reopenForJoining: game.restartVote.reopenForJoining,
+            responses: game.restartVote.responses,
+            waitingFor: game.players
+              .filter((p) => p.userId !== game.creatorId && !game.restartVote!.responses[String(p.userId)])
+              .map((p) => String(p.userId)),
+          }
         : null,
       winnerId: game.winnerId ? String(game.winnerId) : null,
     },

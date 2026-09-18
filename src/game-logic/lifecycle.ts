@@ -1,4 +1,4 @@
-import { GameState, shuffle , emptyStats} from './state'
+import { GameState, shuffle, emptyStats } from './state'
 import { buildFullDeck } from './roles'
 
 export function dealNewGame(game: GameState) {
@@ -16,8 +16,9 @@ export function dealNewGame(game: GameState) {
   game.winnerId = null
   game.pendingAction = null
   game.revealPending = null
+  game.provePending = null
 }
-// روم رو به حالت "منتظر شروع" برمی‌گردونه (بازیکن‌ها می‌مونن، ولی کارت/سکه صفر می‌شه)
+
 export function resetToWaiting(game: GameState) {
   for (const player of game.players) {
     player.roles = []
@@ -32,7 +33,9 @@ export function resetToWaiting(game: GameState) {
   game.winnerId = null
   game.pendingAction = null
   game.revealPending = null
+  game.provePending = null
 }
+
 export function forceResetGame(game: GameState) {
   dealNewGame(game)
   game.log.push('⚠️ بازی توسط سازنده ریست شد')

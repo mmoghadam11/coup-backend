@@ -1,21 +1,13 @@
 import { RoleName, GamePhase, PendingAction } from './types'
 
 export interface PlayerStats {
-  successfulBluffs: number    // ادعای دروغ که کسی چالشش نکرد یا challenge نشد
-  caughtBluffs: number        // ادعای دروغ که لو رفت (چالش رو باخت)
-  correctChallenges: number   // چالش زد و درست از آب دراومد (طرف بلوف می‌زد)
-  wrongChallenges: number     // چالش زد ولی اشتباه بود (طرف راست می‌گفت)
-  successfulSteals: number    // دزدی موفق
-  kills: number                // ترور/کودتای موفق روی یکی دیگه
-}
-export interface InternalPlayer {
-  userId: number
-  firstName: string
-  connected: boolean
-  coins: number
-  roles: RoleName[]
-  revealed: boolean[]
-  stats: PlayerStats 
+  successfulBluffs: number
+  caughtBluffs: number
+  correctChallenges: number
+  wrongChallenges: number
+  successfulSteals: number
+  kills: number   // فقط ترور موفق (قاتل)
+  coups: number   // فقط کودتای موفق
 }
 
 export function emptyStats(): PlayerStats {
@@ -26,7 +18,18 @@ export function emptyStats(): PlayerStats {
     wrongChallenges: 0,
     successfulSteals: 0,
     kills: 0,
+    coups: 0,
   }
+}
+
+export interface InternalPlayer {
+  userId: number
+  firstName: string
+  connected: boolean
+  coins: number
+  roles: RoleName[]
+  revealed: boolean[]
+  stats: PlayerStats
 }
 
 export interface RevealPending {
@@ -34,17 +37,25 @@ export interface RevealPending {
   reason: string
 }
 
+export interface ProvePending {
+  playerId: number
+  claimedRole: RoleName
+  context: 'action' | 'block'
+  challengerId: number
+}
+
 export interface SelectionPending {
   playerId: number
   mode: 'exchange' | 'contessa'
-  pool?: RoleName[]      // فقط برای exchange: کارت‌های فعلی + ۲ کارت جدید
-  keepCount?: number     // فقط برای exchange: چندتا باید نگه داره
+  pool?: RoleName[]
+  keepCount?: number
 }
 
 export interface RestartVoteState {
   reopenForJoining: boolean
   responses: Record<string, 'stay' | 'leave'>
 }
+
 export interface GameState {
   roomId: string | null
   roomName: string | null
@@ -57,6 +68,7 @@ export interface GameState {
   log: string[]
   pendingAction: PendingAction | null
   revealPending: RevealPending | null
+  provePending: ProvePending | null
   selectionPending: SelectionPending | null
   restartVote: RestartVoteState | null
   winnerId: number | null
@@ -75,6 +87,7 @@ export function initialGameState(): GameState {
     log: [],
     pendingAction: null,
     revealPending: null,
+    provePending: null,
     selectionPending: null,
     restartVote: null,
     winnerId: null,

@@ -57,6 +57,7 @@ export type GamePhase =
   | 'awaiting_action'
   | 'awaiting_response'
   | 'awaiting_block_response'
+  | 'proving_claim'
   | 'anarchist_in_progress'
   | 'exchange_in_progress'   // برای ambassador (انتخاب ۲ کارت از ۴)
   | 'contessa_in_progress'   // برای contessa_other (هدف باید یه کارت انتخاب کنه)
