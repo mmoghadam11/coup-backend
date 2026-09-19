@@ -3,13 +3,20 @@ import { eq, sql, desc, asc, ne, and } from 'drizzle-orm'
 import { getDb } from './db'
 import { users, rooms, sessions, roomPlayers } from './db/schema'
 import { requireAdmin } from './adminMiddleware'
+import { markRoomFinishedAndClearPlayers } from './db/roomCleanup'
 
-type Bindings = { DB: D1Database }
+type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace }
 type Variables = { userId: number }
 
 export const adminRoutes = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 adminRoutes.use('*', requireAdmin)
+
+async function closeRoomDO(env: Bindings, roomId: string) {
+  const id = env.ROOM_DO.idFromName(roomId)
+  const stub = env.ROOM_DO.get(id)
+  await stub.fetch('https://internal/admin-close')
+}
 
 function parsePagination(c: any) {
   const page = Math.max(1, Number(c.req.query('page') || '1'))
@@ -119,6 +126,14 @@ adminRoutes.patch('/rooms/:id', async (c) => {
   if ('status' in body) allowed.status = body.status
   if ('name' in body) allowed.name = body.name
 
+  if (body.status === 'finished') {
+    // این بخش اضافه شد: هم D1 هم DO با هم هماهنگ بسته بشن
+    await markRoomFinishedAndClearPlayers(c.env.DB, id)
+    await closeRoomDO(c.env, id)
+  } else {
+    await db.update(rooms).set(allowed).where(eq(rooms.id, id))
+  }
+
   await db.update(rooms).set(allowed).where(eq(rooms.id, id))
   const [updated] = await db.select().from(rooms).where(eq(rooms.id, id))
   return c.json({ room: updated })
@@ -127,6 +142,7 @@ adminRoutes.patch('/rooms/:id', async (c) => {
 adminRoutes.delete('/rooms/:id', async (c) => {
   const db = getDb(c.env.DB)
   const id = c.req.param('id')
+  await closeRoomDO(c.env, id)
   await db.delete(rooms).where(eq(rooms.id, id))
   return c.json({ ok: true })
 })

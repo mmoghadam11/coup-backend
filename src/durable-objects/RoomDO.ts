@@ -21,6 +21,7 @@ import {
   isRestartVoteComplete,
   getLeavingPlayerIds,
 } from '../game-logic/actions/restartVote'
+import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
 
 type Env = { DB: D1Database }
 
@@ -34,11 +35,14 @@ export class RoomDO {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+    if (url.pathname === '/admin-close') {
+      return this.handleAdminClose()
+    }
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected websocket', { status: 426 })
     }
 
-    const url = new URL(request.url)
     const token = url.searchParams.get('token')
     const roomId = url.searchParams.get('roomId')
     if (!token || !roomId) return new Response('token and roomId required', { status: 401 })
@@ -101,6 +105,7 @@ export class RoomDO {
 
     const game = await this.getGame()
     let proofEvent: { playerId: string; playerName: string; role: string; success: boolean } | null = null
+    let shouldWipeAfterBroadcast = false
 
     switch (data.type) {
       case 'chat': {
@@ -174,8 +179,11 @@ export class RoomDO {
         this.forceReset(game, userId)
         break
       case 'close_room':
-        await this.closeRoom(game, userId)
-        break
+      await this.closeRoom(game, userId)
+      if (game.phase === 'room_closed') {
+        shouldWipeAfterBroadcast = true // این خط اضافه شد
+      }
+      break
       default:
         return
     }
@@ -189,6 +197,9 @@ export class RoomDO {
         ws.send(payload)
       }
     }
+    if (shouldWipeAfterBroadcast) { 
+    await this.state.storage.deleteAll()
+  }
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -316,9 +327,27 @@ export class RoomDO {
       this.sendPrivateTo(ws, game, userId)
     }
   }
+  private async handleAdminClose(): Promise<Response> {
+    const game = await this.getGame()
+
+    if (game.phase !== 'room_closed') {
+      game.phase = 'room_closed'
+      game.log.push('روم توسط ادمین بسته شد')
+      await this.saveGame(game)
+
+      const payload = JSON.stringify(buildPublicPayload(game))
+      for (const ws of this.state.getWebSockets()) {
+        ws.send(payload)
+      }
+    }
+
+    await this.state.storage.deleteAll()
+    return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } })
+  }
 
   private async leaveRoom(game: GameState, userId: number) {
     if (game.phase !== 'game_over') return
+    if (userId === game.creatorId) return // این خط اضافه شد — سازنده باید ببنده، نه خارج بشه
     if (!game.roomId) return
 
     const db = getDb(this.env.DB)
@@ -335,13 +364,7 @@ export class RoomDO {
     if (game.creatorId !== requesterId) return
     if (!game.roomId) return
 
-    const db = getDb(this.env.DB)
-    await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-
-    for (const player of game.players) {
-      await db.update(users).set({ active_room_id: null }).where(eq(users.id, player.userId))
-    }
-    await db.delete(roomPlayers).where(eq(roomPlayers.room_id, game.roomId))
+    await markRoomFinishedAndClearPlayers(this.env.DB, game.roomId) // این خط جایگزین کدهای قبلی شد
 
     game.phase = 'room_closed'
     game.log.push('روم توسط سازنده بسته شد')
