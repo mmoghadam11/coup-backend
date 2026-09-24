@@ -10,6 +10,7 @@ export function buildPublicPayload(game: GameState) {
       players: game.players.map((p) => ({
         id: String(p.userId),
         name: p.firstName,
+        photoUrl: p.photoUrl,
         connected: p.connected,
         coins: p.coins,
         roleCount: p.roles.length - p.revealed.filter((r) => r).length,

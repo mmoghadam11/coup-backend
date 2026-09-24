@@ -35,6 +35,19 @@ authRoutes.post('/telegram', async (c) => {
     })
 
     ;[user] = await db.select().from(users).where(eq(users.telegram_id, tgUser.id))
+  }else {
+    // این بخش جدید اضافه شد: هر بار که کاربر لاگین می‌کنه، پروفایلش با آخرین مقدار تلگرام هماهنگ بشه
+    await db
+      .update(users)
+      .set({
+        username: tgUser.username ?? null,
+        first_name: tgUser.first_name,
+        last_name: tgUser.last_name ?? null,
+        photo_url: tgUser.photo_url ?? null,
+      })
+      .where(eq(users.id, user.id))
+
+    ;[user] = await db.select().from(users).where(eq(users.id, user.id))
   }
 
   const sessionToken = crypto.randomUUID()

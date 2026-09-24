@@ -73,11 +73,13 @@ export class RoomDO {
     const existing = game.players.find((p) => p.userId === user.id)
     if (existing) {
       existing.connected = true
+      existing.photoUrl = user.photo_url ?? null
       if (!existing.stats) existing.stats = emptyStats()
     } else {
       game.players.push({
         userId: user.id,
         firstName: user.first_name ?? 'بازیکن',
+        photoUrl: user.photo_url ?? null,
         connected: true,
         coins: 0,
         roles: [],

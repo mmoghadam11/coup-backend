@@ -25,6 +25,7 @@ export function emptyStats(): PlayerStats {
 export interface InternalPlayer {
   userId: number
   firstName: string
+  photoUrl: string | null
   connected: boolean
   coins: number
   roles: RoleName[]
