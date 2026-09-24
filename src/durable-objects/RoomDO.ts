@@ -22,6 +22,7 @@ import {
   getLeavingPlayerIds,
 } from '../game-logic/actions/restartVote'
 import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
+import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAnarchistBlock, startAnarchistAttack } from '../game-logic/actions/anarchist'
 
 type Env = { DB: D1Database }
 
@@ -36,9 +37,11 @@ export class RoomDO {
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url)
+
     if (url.pathname === '/admin-close') {
       return this.handleAdminClose()
     }
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected websocket', { status: 426 })
     }
@@ -58,6 +61,9 @@ export class RoomDO {
     if (!game.creatorId) {
       const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
       if (room) {
+        if (room.status === 'finished' && game.players.length === 0) {
+          return new Response('room is closed', { status: 410 })
+        }
         game.creatorId = room.created_by
         game.roomName = room.name
       }
@@ -67,7 +73,7 @@ export class RoomDO {
     const existing = game.players.find((p) => p.userId === user.id)
     if (existing) {
       existing.connected = true
-      if (!existing.stats) existing.stats = emptyStats() // یه گارد اضافه برای دیتای قدیمی احتمالی
+      if (!existing.stats) existing.stats = emptyStats()
     } else {
       game.players.push({
         userId: user.id,
@@ -132,6 +138,28 @@ export class RoomDO {
       case 'respond_to_block':
         respondToBlock(game, userId, data.response)
         break
+      case 'anarchist_respond':
+        respondToAnarchist(game, userId, data.response)
+        break
+      case 'anarchist_block_respond':
+        respondToAnarchistBlock(game, userId, data.response)
+        break
+      case 'anarchist_pass': {
+        const result = passAnarchistCard(game, userId, Number(data.targetId))
+        if (result.error) {
+          ws.send(JSON.stringify({ type: 'error', message: result.error }))
+        }
+        break
+      }
+      case 'anarchist_neutralize': { // این case جدید اضافه شد
+        const result = neutralizeAnarchist(game, userId)
+        if (result.error) {
+          ws.send(JSON.stringify({ type: 'error', message: result.error }))
+        } else {
+          advanceTurn(game) // چون حمله کامل تموم شد، نوبت باید بره جلو
+        }
+        break
+      }
       case 'prove_card': {
         const claimer = game.players.find((p) => p.userId === userId)
         const result = provideProof(game, userId, data.roleIndex)
@@ -179,11 +207,11 @@ export class RoomDO {
         this.forceReset(game, userId)
         break
       case 'close_room':
-      await this.closeRoom(game, userId)
-      if (game.phase === 'room_closed') {
-        shouldWipeAfterBroadcast = true // این خط اضافه شد
-      }
-      break
+        await this.closeRoom(game, userId)
+        if (game.phase === 'room_closed') {
+          shouldWipeAfterBroadcast = true // این خط اضافه شد
+        }
+        break
       default:
         return
     }
@@ -197,9 +225,9 @@ export class RoomDO {
         ws.send(payload)
       }
     }
-    if (shouldWipeAfterBroadcast) { 
-    await this.state.storage.deleteAll()
-  }
+    if (shouldWipeAfterBroadcast) {
+      await this.state.storage.deleteAll()
+    }
   }
 
   async webSocketClose(ws: WebSocket) {
@@ -236,6 +264,10 @@ export class RoomDO {
     if (action === 'coup') {
       if (!targetId) return { error: 'هدف مشخص نشده' }
       return applyCoup(game, userId, Number(targetId))
+    }
+    if (action === 'anarchist_attack') {
+      if (!targetId) return { error: 'هدف مشخص نشده' }
+      return startAnarchistAttack(game, userId, Number(targetId))
     }
     return startChallengeableAction(game, userId, action as any, targetId)
   }

@@ -40,7 +40,7 @@ export interface RevealPending {
 export interface ProvePending {
   playerId: number
   claimedRole: RoleName
-  context: 'action' | 'block'
+  context: 'action' | 'block' | 'anarchist_block'
   challengerId: number
 }
 
@@ -49,6 +49,14 @@ export interface SelectionPending {
   mode: 'exchange' | 'contessa'
   pool?: RoleName[]
   keepCount?: number
+}
+
+export interface AnarchistPending {
+  originalAttackerId: number
+  currentTargetId: number
+  chain: number[] // همه‌ی کسایی که تا الان این کارت رو داشتن، برای exclude کردن از pass بعدی
+  status: 'awaiting_block_decision' | 'awaiting_block_challenge' | 'awaiting_pass_target'
+  blockChallengeResponses?: Record<string, 'allow' | 'challenge'>
 }
 
 export interface RestartVoteState {
@@ -70,6 +78,7 @@ export interface GameState {
   revealPending: RevealPending | null
   provePending: ProvePending | null
   selectionPending: SelectionPending | null
+  anarchistPending: AnarchistPending | null
   restartVote: RestartVoteState | null
   winnerId: number | null
 }
@@ -89,6 +98,7 @@ export function initialGameState(): GameState {
     revealPending: null,
     provePending: null,
     selectionPending: null,
+    anarchistPending: null,
     restartVote: null,
     winnerId: null,
   }

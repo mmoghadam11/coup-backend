@@ -60,3 +60,4 @@ export function actionCost(action: ActionType): number {
 
 // نقشی که آنارشیست رو بلاک می‌کنه — همیشه شاهدخت
 export const ANARCHIST_BLOCK_ROLE: RoleName = 'princess'
+export const ANARCHIST_COST = 5

@@ -31,14 +31,23 @@ export function buildPublicPayload(game: GameState) {
       selectionPending: game.selectionPending
         ? { playerId: String(game.selectionPending.playerId), mode: game.selectionPending.mode }
         : null,
+      anarchistPending: game.anarchistPending
+        ? {
+          originalAttackerId: String(game.anarchistPending.originalAttackerId),
+          currentTargetId: String(game.anarchistPending.currentTargetId),
+          chain: game.anarchistPending.chain.map(String),
+          status: game.anarchistPending.status,
+          blockChallengeResponses: game.anarchistPending.blockChallengeResponses || {}, // این خط اضافه شد
+        }
+        : null,
       restartVote: game.restartVote
         ? {
-            reopenForJoining: game.restartVote.reopenForJoining,
-            responses: game.restartVote.responses,
-            waitingFor: game.players
-              .filter((p) => p.userId !== game.creatorId && !game.restartVote!.responses[String(p.userId)])
-              .map((p) => String(p.userId)),
-          }
+          reopenForJoining: game.restartVote.reopenForJoining,
+          responses: game.restartVote.responses,
+          waitingFor: game.players
+            .filter((p) => p.userId !== game.creatorId && !game.restartVote!.responses[String(p.userId)])
+            .map((p) => String(p.userId)),
+        }
         : null,
       winnerId: game.winnerId ? String(game.winnerId) : null,
     },

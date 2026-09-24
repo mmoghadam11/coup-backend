@@ -30,6 +30,10 @@ export function provideProof(game: GameState, userId: number, roleIndex: number)
     game.revealPending = { playerId: prove.challengerId, reason: 'lost_challenge' }
 
     if (prove.context === 'block') game.pendingAction = null
+    // context === 'anarchist_block' یعنی anarchistPending.status باید بعد از این reveal بره awaiting_pass_target
+    if (prove.context === 'anarchist_block' && game.anarchistPending) {
+      game.anarchistPending.status = 'awaiting_pass_target'
+    }
 
     game.provePending = null
     return { gameJustEnded: false, shownRole, success: true }
@@ -46,9 +50,14 @@ export function provideProof(game: GameState, userId: number, roleIndex: number)
 
   if (prove.context === 'action') {
     game.pendingAction = null
-  } else if (game.pendingAction) {
-    game.pendingAction.blockedBy = undefined
-    game.pendingAction.blockChallengeResponses = undefined
+  } else if (prove.context === 'block') {
+    if (game.pendingAction) {
+      game.pendingAction.blockedBy = undefined
+      game.pendingAction.blockChallengeResponses = undefined
+    }
+  } else if (prove.context === 'anarchist_block') {
+    // بلاک دروغ بود؛ حمله موفق می‌شه روی همون بلاک‌کننده (اگه هنوز زنده مونده باشه)
+    game.anarchistPending = null
   }
   game.provePending = null
 
@@ -60,8 +69,23 @@ export function provideProof(game: GameState, userId: number, roleIndex: number)
     return { gameJustEnded: true, shownRole, success: false }
   }
 
+  if (prove.context === 'anarchist_block' && !isEliminated(claimer)) {
+    // حمله‌ی آنارشیست موفق شد، یه کارت دیگه هم باید از همون بلاک‌کننده کور بشه
+    game.revealPending = { playerId: prove.playerId, reason: 'anarchist' }
+    return { gameJustEnded: false, shownRole, success: false }
+  }
+
   if (game.pendingAction) {
     resolvePendingActionEffect(game)
+    return { gameJustEnded: false, shownRole, success: false }
+  }
+
+  if (game.revealPending || game.selectionPending) {
+    return { gameJustEnded: false, shownRole, success: false }
+  }
+
+  if (game.anarchistPending) {
+    game.phase = 'anarchist_in_progress'
     return { gameJustEnded: false, shownRole, success: false }
   }
 

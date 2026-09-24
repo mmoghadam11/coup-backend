@@ -30,9 +30,15 @@ export function revealCard(game: GameState, userId: number, roleIndex: number): 
 
   if (game.pendingAction) {
     resolvePendingActionEffect(game)
-    if (game.revealPending || game.selectionPending) {
-      return { gameJustEnded: false }
-    }
+    return { gameJustEnded: false }
+  }
+
+  if (game.selectionPending) {
+    return { gameJustEnded: false }
+  }
+
+  if (game.anarchistPending) {
+    game.phase = 'anarchist_in_progress'
     return { gameJustEnded: false }
   }
 
