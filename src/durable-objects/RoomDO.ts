@@ -74,6 +74,7 @@ export class RoomDO {
     if (existing) {
       existing.connected = true
       existing.photoUrl = user.photo_url ?? null
+      existing.firstName = user.first_name ?? "بازیکن"
       if (!existing.stats) existing.stats = emptyStats()
     } else {
       game.players.push({
