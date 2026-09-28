@@ -1,0 +1,1 @@
+ALTER TABLE `rooms` ADD `group_id` integer REFERENCES telegram_groups(id);

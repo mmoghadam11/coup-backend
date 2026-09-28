@@ -8,6 +8,7 @@
 			"binding": "DB",
 			"database_name": "coup_db",
 			"database_id": "3f012646-9475-49dd-9156-ebadda2a922a",
+			"migrations_dir": "drizzle"
 			// "remote": true
 		}
 	],

@@ -23,6 +23,7 @@ import {
 } from '../game-logic/actions/restartVote'
 import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
 import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAnarchistBlock, startAnarchistAttack } from '../game-logic/actions/anarchist'
+import { recordGameResult } from '../db/matchStats'
 
 type Env = { DB: D1Database }
 
@@ -169,6 +170,7 @@ export class RoomDO {
         if (result.gameJustEnded && game.roomId) {
           const db = getDb(this.env.DB)
           await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+          await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
         }
         if (result.shownRole && claimer) {
           proofEvent = {
@@ -185,6 +187,7 @@ export class RoomDO {
         if (result.gameJustEnded && game.roomId) {
           const db = getDb(this.env.DB)
           await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+          await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
         }
         break
       }
@@ -412,4 +415,18 @@ export class RoomDO {
 
     forceResetGame(game)
   }
+
+  private buildGameResults(game: GameState) {
+  return game.players.map((p) => ({
+    userId: p.userId,
+    isWinner: p.userId === game.winnerId,
+    kills: p.stats.kills,
+    coups: p.stats.coups,
+    successfulBluffs: p.stats.successfulBluffs,
+    caughtBluffs: p.stats.caughtBluffs,
+    correctChallenges: p.stats.correctChallenges,
+    wrongChallenges: p.stats.wrongChallenges,
+    successfulSteals: p.stats.successfulSteals,
+  }))
+}
 }
