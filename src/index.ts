@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { authRoutes } from './auth'
 import { roomsRoutes } from './rooms'
 import { adminRoutes } from './admin'
+import { leaderboardRoutes } from './leaderboard'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -32,6 +33,7 @@ app.get('/rooms/:id/ws', (c) => {
   url.searchParams.set('roomId', roomId)
   return stub.fetch(new Request(url.toString(), c.req.raw))
 })
+app.route('/leaderboard', leaderboardRoutes)
 app.route('/admin', adminRoutes)
 app.route('/rooms', roomsRoutes)
 
