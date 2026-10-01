@@ -13,7 +13,7 @@ import {
 } from '../game-logic/actions/challengeFlow'
 import { revealCard } from '../game-logic/actions/reveal'
 import { provideProof } from '../game-logic/actions/proof'
-import { dealNewGame, forceResetGame, resetToWaiting } from '../game-logic/lifecycle'
+import { dealNewGame, evaluateMatchmakingTransition, finishMatchmakingHand, forceResetGame, resetToWaiting, startMatchmakingHand } from '../game-logic/lifecycle'
 import { confirmContessaSelection, confirmExchangeSelection } from '../game-logic/actions/selection'
 import {
   initiateRestartVote,
@@ -24,6 +24,9 @@ import {
 import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
 import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAnarchistBlock, startAnarchistAttack } from '../game-logic/actions/anarchist'
 import { recordGameResult } from '../db/matchStats'
+import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, registerDisconnect } from '../game-logic/disconnectManager'
+import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic/matchmakingConfig'
+import { foldHand, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 
 type Env = { DB: D1Database }
 
@@ -43,6 +46,14 @@ export class RoomDO {
       return this.handleAdminClose()
     }
 
+    if (url.pathname === '/room-info') {
+      const game = await this.getGame()
+      return new Response(
+        JSON.stringify({ playerCount: game.players.length, roomPhase: game.roomPhase }),
+        { headers: { 'Content-Type': 'application/json' } }
+      )
+    }
+
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected websocket', { status: 426 })
     }
@@ -59,7 +70,7 @@ export class RoomDO {
     if (!user) return new Response('user not found', { status: 401 })
 
     const game = await this.getGame()
-    if (!game.creatorId) {
+    if (game.roomName === null) {
       const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
       if (room) {
         if (room.status === 'finished' && game.players.length === 0) {
@@ -67,16 +78,22 @@ export class RoomDO {
         }
         game.creatorId = room.created_by
         game.roomName = room.name
+        game.origin = room.origin as any
+        game.visibility = room.visibility as any
       }
     }
     game.roomId = roomId
 
     const existing = game.players.find((p) => p.userId === user.id)
+    if (!existing && game.players.length >= MAX_PLAYERS_PER_ROOM) {
+      return new Response('room is full', { status: 409 })
+    }
     if (existing) {
       existing.connected = true
       existing.photoUrl = user.photo_url ?? null
       existing.firstName = user.first_name ?? "بازیکن"
       if (!existing.stats) existing.stats = emptyStats()
+      clearDisconnect(game, user.id)
     } else {
       game.players.push({
         userId: user.id,
@@ -90,7 +107,10 @@ export class RoomDO {
       })
       game.log.push(`${user.first_name} به روم پیوست`)
     }
+    const transition = evaluateMatchmakingTransition(game)
+    await this.syncRoomStatusToD1(game)
     await this.saveGame(game)
+    await this.scheduleNextAlarm(game)
 
     const pair = new WebSocketPair()
     const [client, server] = Object.values(pair)
@@ -171,6 +191,7 @@ export class RoomDO {
           const db = getDb(this.env.DB)
           await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
           await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+          await this.onHandEnded(game)
         }
         if (result.shownRole && claimer) {
           proofEvent = {
@@ -185,9 +206,10 @@ export class RoomDO {
       case 'reveal_card': {
         const result = revealCard(game, userId, data.roleIndex)
         if (result.gameJustEnded && game.roomId) {
-          const db = getDb(this.env.DB)
-          await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-          await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+          // const db = getDb(this.env.DB)
+          // await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+          // await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+          await this.onHandEnded(game)
         }
         break
       }
@@ -209,6 +231,44 @@ export class RoomDO {
       case 'leave_room':
         await this.leaveRoom(game, userId)
         break
+      case 'fold': {
+        const result = foldHand(game, userId)
+        if (result.handEnded) {
+          await this.onHandEnded(game)
+        }
+        break
+      }
+      case 'mm_leave': {
+        if (game.origin === 'matchmaking') {
+          const wasPlaying = game.roomPhase === 'playing'
+          const player = game.players.find((p) => p.userId === userId)
+          const stillAlive = player && !player.revealed.every((r) => r)
+
+          removePlayerFromRoom(game, userId)
+
+          if (game.roomId) {
+            const db = getDb(this.env.DB)
+            await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+            await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+          }
+
+          if (wasPlaying && stillAlive) {
+            const alivePlayers = game.players.filter((p) => !p.revealed.every((r) => r))
+            if (alivePlayers.length <= 1 && game.phase !== 'game_over') {
+              game.phase = 'game_over'
+              game.winnerId = alivePlayers[0]?.userId ?? null
+              await this.onHandEnded(game)
+            }
+          }
+
+          const transition = evaluateMatchmakingTransition(game)
+          await this.syncRoomStatusToD1(game)
+          if (transition.needsAlarmUpdate) {
+            // alarm پایین‌تر، بعد از switch، دوباره schedule می‌شه
+          }
+        }
+        break
+      }
       case 'force_reset':
         this.forceReset(game, userId)
         break
@@ -240,8 +300,12 @@ export class RoomDO {
     const userId = Number(this.state.getTags(ws)[0])
     const game = await this.getGame()
     const player = game.players.find((p) => p.userId === userId)
-    if (player) player.connected = false
+    if (player) {
+      player.connected = false
+      registerDisconnect(game, userId) // این خط اضافه شد
+    }
     await this.saveGame(game)
+    await this.scheduleNextAlarm(game)
     await this.broadcast()
   }
 
@@ -335,7 +399,7 @@ export class RoomDO {
   }
 
   private async getGame(): Promise<GameState> {
-    return (await this.state.storage.get<GameState>('game')) ?? initialGameState()
+    return (await this.state.storage.get<GameState>('game')) ?? initialGameState('lobby')
   }
 
   private async saveGame(game: GameState) {
@@ -398,6 +462,92 @@ export class RoomDO {
     game.log.push(`${player?.firstName ?? 'یک بازیکن'} از روم خارج شد`)
   }
 
+  async alarm() {
+    const game = await this.getGame()
+
+    if (game.roomPhase === 'starting' && game.countdownEndsAt && Date.now() >= game.countdownEndsAt) {
+      startMatchmakingHand(game)
+      await this.syncRoomStatusToD1(game)
+    }
+
+    if (game.handResultEndsAt && Date.now() >= game.handResultEndsAt) {
+      finishMatchmakingHand(game)
+      await this.syncRoomStatusToD1(game)
+    }
+
+    const expired = getExpiredDisconnects(game)
+    for (const expiredUserId of expired) {
+      await this.forceLeaveDueToDisconnect(game, expiredUserId)
+      clearDisconnect(game, expiredUserId)
+    }
+    if (expired.length > 0 && game.origin === 'matchmaking') {
+      const transition = evaluateMatchmakingTransition(game)
+      await this.syncRoomStatusToD1(game)
+    }
+
+    await this.saveGame(game)
+    await this.scheduleNextAlarm(game)
+    await this.broadcast()
+  }
+
+  private async scheduleNextAlarm(game: GameState) {
+    const candidates: number[] = []
+    if (game.roomPhase === 'starting' && game.countdownEndsAt) candidates.push(game.countdownEndsAt)
+    if (game.handResultEndsAt) candidates.push(game.handResultEndsAt)
+    const nextDisconnect = getNextDisconnectDeadline(game)
+    if (nextDisconnect) candidates.push(nextDisconnect)
+
+    if (candidates.length === 0) {
+      await this.state.storage.deleteAlarm()
+    } else {
+      await this.state.storage.setAlarm(Math.min(...candidates))
+    }
+  }
+
+  private async syncRoomStatusToD1(game: GameState) {
+    if (!game.roomId || game.origin !== 'matchmaking') return
+    const db = getDb(this.env.DB)
+    await db.update(rooms).set({ status: game.roomPhase }).where(eq(rooms.id, game.roomId))
+  }
+
+  private async onHandEnded(game: GameState) {
+    if (!game.roomId) return
+
+    await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+
+    if (game.origin === 'matchmaking') {
+      game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
+      await this.syncRoomStatusToD1(game) // الان هنوز roomPhase='playing'، status رو همونجوری نگه می‌داریم تا alarm برگردوندش به waiting
+    } else {
+      if (game.roomId) {
+        const db = getDb(this.env.DB)
+        await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+      }
+    }
+  }
+
+
+
+  private async forceLeaveDueToDisconnect(game: GameState, userId: number) {
+    const player = game.players.find((p) => p.userId === userId)
+    if (!player) return
+
+    // کارت‌هاش رو کامل show کن (مثل باختن)
+    player.revealed = player.roles.map(() => true)
+    game.log.push(`${player.firstName} به‌خاطر قطعی طولانی از بازی خارج شد`)
+
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+      await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+    }
+
+    game.players = game.players.filter((p) => p.userId !== userId)
+    game.turnOrder = game.turnOrder.filter((id) => id !== userId)
+
+    // اگه این باعث شد فقط یه نفر زنده بمونه، بازی تموم شده حساب کن (برای matchmaking، منطق finishMatchmakingHand جداگانه صدا زده میشه قدم بعد)
+  }
+
   private async closeRoom(game: GameState, requesterId: number) {
     if (game.creatorId !== requesterId) return
     if (!game.roomId) return
@@ -417,16 +567,16 @@ export class RoomDO {
   }
 
   private buildGameResults(game: GameState) {
-  return game.players.map((p) => ({
-    userId: p.userId,
-    isWinner: p.userId === game.winnerId,
-    kills: p.stats.kills,
-    coups: p.stats.coups,
-    successfulBluffs: p.stats.successfulBluffs,
-    caughtBluffs: p.stats.caughtBluffs,
-    correctChallenges: p.stats.correctChallenges,
-    wrongChallenges: p.stats.wrongChallenges,
-    successfulSteals: p.stats.successfulSteals,
-  }))
-}
+    return game.players.map((p) => ({
+      userId: p.userId,
+      isWinner: p.userId === game.winnerId,
+      kills: p.stats.kills,
+      coups: p.stats.coups,
+      successfulBluffs: p.stats.successfulBluffs,
+      caughtBluffs: p.stats.caughtBluffs,
+      correctChallenges: p.stats.correctChallenges,
+      wrongChallenges: p.stats.wrongChallenges,
+      successfulSteals: p.stats.successfulSteals,
+    }))
+  }
 }

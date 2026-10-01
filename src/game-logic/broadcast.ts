@@ -6,6 +6,10 @@ export function buildPublicPayload(game: GameState) {
     state: {
       phase: game.phase,
       roomName: game.roomName,
+      origin: game.origin,                           // این خط اضافه شد
+      roomPhase: game.roomPhase,                      // این خط اضافه شد
+      countdownEndsAt: game.countdownEndsAt,          // این خط اضافه شد
+      handResultEndsAt: game.handResultEndsAt,
       creatorId: game.creatorId ? String(game.creatorId) : null,
       players: game.players.map((p) => ({
         id: String(p.userId),

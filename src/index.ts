@@ -4,6 +4,7 @@ import { authRoutes } from './auth'
 import { roomsRoutes } from './rooms'
 import { adminRoutes } from './admin'
 import { leaderboardRoutes } from './leaderboard'
+import { matchmakingRoutes } from './matchmaking'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -33,6 +34,7 @@ app.get('/rooms/:id/ws', (c) => {
   url.searchParams.set('roomId', roomId)
   return stub.fetch(new Request(url.toString(), c.req.raw))
 })
+app.route('/matchmake', matchmakingRoutes)
 app.route('/leaderboard', leaderboardRoutes)
 app.route('/admin', adminRoutes)
 app.route('/rooms', roomsRoutes)

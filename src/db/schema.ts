@@ -22,6 +22,10 @@ export const rooms = sqliteTable('rooms', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   status: text('status').notNull().default('waiting'),
+  origin: text('origin').notNull().default('lobby'),       // 'matchmaking' | 'lobby' | 'group'
+  visibility: text('visibility'),                           // 'public' | 'private' — فقط برای origin='lobby' پر می‌شه
+  join_code: text('join_code'),                              // فقط برای لابی private؛ کد ۶ کاراکتری یکتا
+  cost_required: integer('cost_required').notNull().default(0),
   created_by: integer('created_by').references(() => users.id),
   group_id: integer('group_id').references(() => telegramGroups.id),
   created_at: integer('created_at').notNull().default(0),

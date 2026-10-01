@@ -1,5 +1,16 @@
 import { RoleName, GamePhase, PendingAction } from './types'
 
+export type RoomOrigin = 'matchmaking' | 'lobby' | 'group'
+export type RoomVisibility = 'public' | 'private'
+
+export type RoomPhase =
+  | 'waiting'
+  | 'starting'
+  | 'playing'
+  | 'closed'
+
+export type AlarmPurpose = 'countdown' | 'disconnect'
+
 export interface PlayerStats {
   successfulBluffs: number
   caughtBluffs: number
@@ -68,8 +79,13 @@ export interface RestartVoteState {
 export interface GameState {
   roomId: string | null
   roomName: string | null
+  origin: RoomOrigin               // این خط اضافه شد
+  visibility: RoomVisibility | null // این خط اضافه شد (فقط lobby پر می‌شه)
+  roomPhase: RoomPhase
+
   phase: GamePhase
   creatorId: number | null
+
   players: InternalPlayer[]
   turnOrder: number[]
   currentTurnIndex: number
@@ -82,12 +98,21 @@ export interface GameState {
   anarchistPending: AnarchistPending | null
   restartVote: RestartVoteState | null
   winnerId: number | null
+
+  disconnectDeadlines: Record<string, number>
+  foldedThisHand: number[]   // این خط اضافه شد — بازیکنانی که این دست fold کردن (برای matchmaking/هر روم چندباره)
+  // pendingAlarm: { purpose: AlarmPurpose; targetUserId?: number } | null
+  countdownEndsAt: number | null   // این خط اضافه شد — timestamp پایان شمارش معکوس، برای نمایش به فرانت هم لازمه
+  handResultEndsAt: number | null
 }
 
-export function initialGameState(): GameState {
+export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
   return {
     roomId: null,
     roomName: null,
+    origin,
+    visibility: null,
+    roomPhase: origin === 'matchmaking' ? 'waiting' : 'playing',
     phase: 'waiting_for_players',
     creatorId: null,
     players: [],
@@ -102,6 +127,11 @@ export function initialGameState(): GameState {
     anarchistPending: null,
     restartVote: null,
     winnerId: null,
+    disconnectDeadlines: {},
+    foldedThisHand: [],
+    // pendingAlarm: null,
+    countdownEndsAt: null,
+    handResultEndsAt: null,
   }
 }
 
@@ -109,7 +139,7 @@ export function shuffle<T>(arr: T[]): T[] {
   const copy = [...arr]
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
-    ;[copy[i], copy[j]] = [copy[j], copy[i]]
+      ;[copy[i], copy[j]] = [copy[j], copy[i]]
   }
   return copy
 }
