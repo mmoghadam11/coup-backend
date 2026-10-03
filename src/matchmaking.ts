@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { eq, and, sql } from 'drizzle-orm'
 import { getDb } from './db'
-import { rooms } from './db/schema'
+import { rooms, users } from './db/schema' // users اضافه شد
 import { requireAuth } from './authMiddleware'
 import { MAX_PLAYERS_PER_ROOM } from './game-logic/matchmakingConfig'
 
@@ -48,10 +48,12 @@ matchmakingRoutes.post('/', async (c) => {
     })
   }
 
+  // این خط اضافه شد — دقیقاً همون چیزی که جا افتاده بود
+  await db.update(users).set({ active_room_id: targetRoomId }).where(eq(users.id, userId))
+
   return c.json({ roomId: targetRoomId })
 })
 
-// به هر روم کاندید، یه فراخوانی داخلی می‌زنیم که بپرسیم "جا داری؟"
 async function findRoomWithSpace(env: Bindings, roomIds: string[]): Promise<string | null> {
   for (const roomId of roomIds) {
     const id = env.ROOM_DO.idFromName(roomId)

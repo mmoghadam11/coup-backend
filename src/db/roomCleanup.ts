@@ -2,12 +2,12 @@
 import { getDb } from './index'
 import { rooms, roomPlayers, users } from './schema'
 
-// این تابع فقط سمت D1 کار می‌کنه: وضعیت روم finished می‌شه،
+// این تابع فقط سمت D1 کار می‌کنه: وضعیت روم 'closed' می‌شه،
 // active_room_id همه‌ی بازیکن‌هاش پاک می‌شه، و عضویت‌هاشون حذف می‌شه
 export async function markRoomFinishedAndClearPlayers(d1: D1Database, roomId: string) {
   const db = getDb(d1)
 
-  await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, roomId))
+  await db.update(rooms).set({ status: 'closed' }).where(eq(rooms.id, roomId))
 
   const playersInRoom = await db
     .select({ user_id: roomPlayers.user_id })

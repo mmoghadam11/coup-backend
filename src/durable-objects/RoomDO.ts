@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm'
 import { getDb } from '../db'
 import { sessions, users, rooms, roomPlayers } from '../db/schema'
-import { GameState, initialGameState, emptyStats } from '../game-logic/state'
+import { GameState, initialGameState, emptyStats, isEliminated } from '../game-logic/state'
 import { buildPublicPayload } from '../game-logic/broadcast'
 import { advanceTurn } from '../game-logic/turns'
 import { applyIncome, applyCoup } from '../game-logic/actions/basic'
@@ -73,13 +73,17 @@ export class RoomDO {
     if (game.roomName === null) {
       const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
       if (room) {
-        if (room.status === 'finished' && game.players.length === 0) {
+        if (room.status === 'closed' && game.players.length === 0) {
           return new Response('room is closed', { status: 410 })
         }
         game.creatorId = room.created_by
         game.roomName = room.name
         game.origin = room.origin as any
         game.visibility = room.visibility as any
+        // game.roomPhase = room.status as any   // ✅ این خط اضافه شد
+        if (room.origin === 'matchmaking') {
+          game.roomPhase = room.status as any // حالا enum یکیه، این امن‌تره
+        }
       }
     }
     game.roomId = roomId
@@ -188,9 +192,9 @@ export class RoomDO {
         const claimer = game.players.find((p) => p.userId === userId)
         const result = provideProof(game, userId, data.roleIndex)
         if (result.gameJustEnded && game.roomId) {
-          const db = getDb(this.env.DB)
-          await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-          await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+          // const db = getDb(this.env.DB)
+          // await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+          // await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
           await this.onHandEnded(game)
         }
         if (result.shownRole && claimer) {
@@ -283,6 +287,7 @@ export class RoomDO {
     }
 
     await this.saveGame(game)
+    await this.scheduleNextAlarm(game)   // ✅ این خط
     await this.broadcast()
     // این بخش جدید: یه پیام یک‌باره (نه بخشی از state دائمی) به همه بفرست
     if (proofEvent) {
@@ -298,6 +303,10 @@ export class RoomDO {
 
   async webSocketClose(ws: WebSocket) {
     const userId = Number(this.state.getTags(ws)[0])
+    // اگه کانکشن دیگه‌ای (مثلاً از یه reconnect سریع) برای همین کاربر هنوز زنده‌ست، آفلاینش نکن
+    const otherLiveSockets = this.state.getWebSockets(String(userId)).filter((s) => s !== ws)
+    if (otherLiveSockets.length > 0) return
+
     const game = await this.getGame()
     const player = game.players.find((p) => p.userId === userId)
     if (player) {
@@ -434,8 +443,10 @@ export class RoomDO {
 
     if (game.phase !== 'room_closed') {
       game.phase = 'room_closed'
+      game.roomPhase = 'closed'
       game.log.push('روم توسط ادمین بسته شد')
       await this.saveGame(game)
+      await this.state.storage.deleteAlarm()
 
       const payload = JSON.stringify(buildPublicPayload(game))
       for (const ws of this.state.getWebSockets()) {
@@ -473,15 +484,23 @@ export class RoomDO {
     if (game.handResultEndsAt && Date.now() >= game.handResultEndsAt) {
       finishMatchmakingHand(game)
       await this.syncRoomStatusToD1(game)
+      // این بخش جدید اضافه شد: بعد از برگشتن به waiting، فوراً چک کن شاید همین الان کافیه برای starting
+      if (game.origin === 'matchmaking') {
+        evaluateMatchmakingTransition(game)
+        await this.syncRoomStatusToD1(game)
+      }
     }
 
     const expired = getExpiredDisconnects(game)
     for (const expiredUserId of expired) {
-      await this.forceLeaveDueToDisconnect(game, expiredUserId)
+      const handEnded = await this.forceLeaveDueToDisconnect(game, expiredUserId)
       clearDisconnect(game, expiredUserId)
+      if (handEnded) {
+        await this.onHandEnded(game)
+      }
     }
     if (expired.length > 0 && game.origin === 'matchmaking') {
-      const transition = evaluateMatchmakingTransition(game)
+      evaluateMatchmakingTransition(game)
       await this.syncRoomStatusToD1(game)
     }
 
@@ -518,35 +537,61 @@ export class RoomDO {
     if (game.origin === 'matchmaking') {
       game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
       await this.syncRoomStatusToD1(game) // الان هنوز roomPhase='playing'، status رو همونجوری نگه می‌داریم تا alarm برگردوندش به waiting
-    } else {
-      if (game.roomId) {
-        const db = getDb(this.env.DB)
-        await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-      }
-    }
+    } 
+    // else {
+    //   if (game.roomId) {
+    //     const db = getDb(this.env.DB)
+    //     await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
+    //   }
+    // }
   }
 
 
 
-  private async forceLeaveDueToDisconnect(game: GameState, userId: number) {
-    const player = game.players.find((p) => p.userId === userId)
-    if (!player) return
+  // این تابع کامل بازنویسی شد — حالا واقعاً پایان دست رو هم مدیریت می‌کنه
+private async forceLeaveDueToDisconnect(game: GameState, userId: number): Promise<boolean> {
+  const player = game.players.find((p) => p.userId === userId)
+  if (!player) return false
 
-    // کارت‌هاش رو کامل show کن (مثل باختن)
-    player.revealed = player.roles.map(() => true)
-    game.log.push(`${player.firstName} به‌خاطر قطعی طولانی از بازی خارج شد`)
+  const wasPlaying = game.roomPhase === 'playing' && game.phase !== 'waiting_for_players' && game.phase !== 'game_over'
 
-    if (game.roomId) {
-      const db = getDb(this.env.DB)
-      await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
-      await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
-    }
+  player.revealed = player.roles.map(() => true)
+  game.log.push(`${player.firstName} به‌خاطر قطعی طولانی از بازی خارج شد`)
 
-    game.players = game.players.filter((p) => p.userId !== userId)
-    game.turnOrder = game.turnOrder.filter((id) => id !== userId)
-
-    // اگه این باعث شد فقط یه نفر زنده بمونه، بازی تموم شده حساب کن (برای matchmaking، منطق finishMatchmakingHand جداگانه صدا زده میشه قدم بعد)
+  if (game.roomId) {
+    const db = getDb(this.env.DB)
+    await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+    await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
   }
+
+  game.players = game.players.filter((p) => p.userId !== userId)
+  game.turnOrder = game.turnOrder.filter((id) => id !== userId)
+
+  // اگه این بازیکن وسط یه pendingAction/reveal/selection/anarchist بود، اون‌ها رو پاک کن که گیر نکنیم
+  if (game.revealPending?.playerId === userId) game.revealPending = null
+  if (game.provePending?.playerId === userId || game.provePending?.challengerId === userId) game.provePending = null
+  if (game.selectionPending?.playerId === userId) game.selectionPending = null
+  if (game.anarchistPending && (game.anarchistPending.originalAttackerId === userId || game.anarchistPending.currentTargetId === userId)) {
+    game.anarchistPending = null
+  }
+  if (game.pendingAction && (game.pendingAction.actorId === String(userId) || game.pendingAction.targetId === String(userId))) {
+    game.pendingAction = null
+  }
+
+  if (!wasPlaying) return false
+
+  const alivePlayers = game.players.filter((p) => !isEliminated(p))
+  if (alivePlayers.length <= 1) {
+    game.phase = 'game_over'
+    game.winnerId = alivePlayers[0]?.userId ?? null
+    return true
+  }
+
+  if (game.turnOrder.length > 0 && game.currentTurnIndex >= game.turnOrder.length) {
+    game.currentTurnIndex = 0
+  }
+  return false
+}
 
   private async closeRoom(game: GameState, requesterId: number) {
     if (game.creatorId !== requesterId) return

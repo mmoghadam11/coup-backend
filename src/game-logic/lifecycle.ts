@@ -86,6 +86,7 @@ export function startMatchmakingHand(game: GameState) {
 // وقتی یه دست matchmaking تموم شد، برگرد به waiting (نه closed) تا دست بعدی بتونه شروع بشه
 export function finishMatchmakingHand(game: GameState) {
   game.roomPhase = 'waiting'
+  game.handResultEndsAt = null   // ✅ این خط
   resetToWaiting(game)
   game.log.push('این دست تموم شد؛ منتظر بازیکنان برای دست بعدی')
 }

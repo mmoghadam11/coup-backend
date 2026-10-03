@@ -85,8 +85,8 @@ adminRoutes.delete('/users/:id', async (c) => {
   // روم‌های فعالی که این کاربر ساخته رو پایان بده (قبل از اینکه created_by رو null کنیم)
   await db
     .update(rooms)
-    .set({ status: 'finished' })
-    .where(and(eq(rooms.created_by, id), ne(rooms.status, 'finished')))
+    .set({ status: 'closed' })
+    .where(and(eq(rooms.created_by, id), ne(rooms.status, 'closed')))
   // روم‌هایی که این کاربر ساخته رو حذف نمی‌کنیم (چون داده‌ی تاریخی مهمه)، فقط created_by رو خالی می‌کنیم
   await db.update(rooms).set({ created_by: null }).where(eq(rooms.created_by, id))
   await db.delete(users).where(eq(users.id, id))
@@ -126,15 +126,18 @@ adminRoutes.patch('/rooms/:id', async (c) => {
   if ('status' in body) allowed.status = body.status
   if ('name' in body) allowed.name = body.name
 
-  if (body.status === 'finished') {
+  if (body.status === 'closed') {
     // این بخش اضافه شد: هم D1 هم DO با هم هماهنگ بسته بشن
     await markRoomFinishedAndClearPlayers(c.env.DB, id)
     await closeRoomDO(c.env, id)
+    if ('name' in body) {
+      // اگه ادمین همزمان اسم رو هم عوض کرده بود، چون markRoomFinishedAndClearPlayers فقط status رو دست می‌زنه، اسم رو جدا آپدیت می‌کنیم
+      await db.update(rooms).set({ name: body.name }).where(eq(rooms.id, id))
+    }
   } else {
     await db.update(rooms).set(allowed).where(eq(rooms.id, id))
   }
 
-  await db.update(rooms).set(allowed).where(eq(rooms.id, id))
   const [updated] = await db.select().from(rooms).where(eq(rooms.id, id))
   return c.json({ room: updated })
 })
