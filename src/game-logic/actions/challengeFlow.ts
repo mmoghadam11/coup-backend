@@ -1,4 +1,4 @@
-import { GameState, shuffle } from '../state'
+import { GameState, isEliminated, shuffle } from '../state'
 import { ActionType, RoleName } from '../types'
 import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost } from '../roles'
 import { advanceTurn } from '../turns'
@@ -19,7 +19,7 @@ export function startChallengeableAction(
   }
 
   const claimedRole = ACTION_TO_ROLE[action]
-  const others = game.players.filter((p) => p.userId !== actorId)
+  const others = game.players.filter((p) => p.userId !== actorId && !isEliminated(p))
 
   game.pendingAction = {
     id: crypto.randomUUID(),
@@ -95,7 +95,7 @@ export function respondToBlock(game: GameState, userId: number, response: 'allow
   }
 
   const eligible = game.players
-    .filter((p) => p.userId !== Number(pending.blockedBy!.playerId))
+    .filter((p) => p.userId !== Number(pending.blockedBy!.playerId) && !isEliminated(p))
     .map((p) => String(p.userId))
   const allResponded = eligible.every((id) => pending.blockChallengeResponses![id])
 

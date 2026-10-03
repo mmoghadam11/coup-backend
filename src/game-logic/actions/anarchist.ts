@@ -1,4 +1,4 @@
-import { GameState } from '../state'
+import { GameState, isEliminated } from '../state'
 import { ANARCHIST_COST, ANARCHIST_BLOCK_ROLE } from '../roles'
 
 export function startAnarchistAttack(game: GameState, actorId: number, targetId: number): { error?: string } {
@@ -56,7 +56,7 @@ export function respondToAnarchistBlock(game: GameState, userId: number, respons
     return
   }
 
-  const eligible = game.players.filter((p) => p.userId !== ap.currentTargetId).map((p) => String(p.userId))
+  const eligible = game.players.filter((p) => p.userId !== ap.currentTargetId && !isEliminated(p)).map((p) => String(p.userId))
   const allResponded = eligible.every((id) => ap.blockChallengeResponses![id])
 
   if (allResponded) {
