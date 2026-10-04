@@ -5,6 +5,8 @@ import { roomsRoutes } from './rooms'
 import { adminRoutes } from './admin'
 import { leaderboardRoutes } from './leaderboard'
 import { matchmakingRoutes } from './matchmaking'
+import { botWebhookRoutes } from './bot/webhook'
+import { runWeeklyReminderJob } from './bot/reminderJob'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -38,5 +40,13 @@ app.route('/matchmake', matchmakingRoutes)
 app.route('/leaderboard', leaderboardRoutes)
 app.route('/admin', adminRoutes)
 app.route('/rooms', roomsRoutes)
+app.route('/bot/webhook', botWebhookRoutes)
 
-export default app
+// export default app
+
+export default {
+  fetch: app.fetch,
+  async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+    ctx.waitUntil(runWeeklyReminderJob(env.DB, env.TELEGRAM_BOT_TOKEN))
+  },
+}
