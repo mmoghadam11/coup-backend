@@ -3,6 +3,7 @@
 	"name": "coup-backend",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-02",
+	"compatibility_flags": ["nodejs_compat"],
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -21,8 +22,17 @@
 		]
 	},
 	"migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RoomDO"] }
-  ]
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"RoomDO"
+			]
+		}
+	],
+	//این یعنی هر روز ساعت ۱۲:۰۰ UTC اجرا بشه
+	"triggers": {
+		"crons": ["0 12 * * *"]
+	}
 	// "compatibility_flags": [
 	//   "nodejs_compat"
 	// ],
