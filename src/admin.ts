@@ -4,8 +4,9 @@ import { getDb } from './db'
 import { users, rooms, sessions, roomPlayers } from './db/schema'
 import { requireAdmin } from './adminMiddleware'
 import { markRoomFinishedAndClearPlayers } from './db/roomCleanup'
+import { runWeeklyReminderJob, sendTestReminder } from './bot/reminderJob'
 
-type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace }
+type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace; TELEGRAM_BOT_TOKEN: string }
 type Variables = { userId: number }
 
 export const adminRoutes = new Hono<{ Bindings: Bindings; Variables: Variables }>()
@@ -148,4 +149,10 @@ adminRoutes.delete('/rooms/:id', async (c) => {
   await closeRoomDO(c.env, id)
   await db.delete(rooms).where(eq(rooms.id, id))
   return c.json({ ok: true })
+})
+
+adminRoutes.post('/test-reminder/:userId', async (c) => {
+  const userId = Number(c.req.param('userId'))
+  const sent = await sendTestReminder(c.env.DB, c.env.TELEGRAM_BOT_TOKEN, userId)
+  return c.json({ sent })
 })
