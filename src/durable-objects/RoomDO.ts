@@ -309,10 +309,26 @@ export class RoomDO {
 
     const game = await this.getGame()
     const player = game.players.find((p) => p.userId === userId)
-    if (player) {
-      player.connected = false
-      registerDisconnect(game, userId) // این خط اضافه شد
+    if (!player) return
+
+    // این بخش جدید اضافه شد: حین waiting/starting، دیسکانکت = حذف فوری (بدون مهلت)
+    if (game.origin === 'matchmaking' && (game.roomPhase === 'waiting' || game.roomPhase === 'starting')) {
+      if (game.roomId) {
+        const db = getDb(this.env.DB)
+        await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+        await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+      }
+      removePlayerFromRoom(game, userId)
+      evaluateMatchmakingTransition(game) // ممکنه starting→waiting برگرده اگه تعداد کم شد
+      await this.syncRoomStatusToD1(game)
+      await this.saveGame(game)
+      await this.scheduleNextAlarm(game)
+      await this.broadcast()
+      return
     }
+    player.connected = false
+    registerDisconnect(game, userId) // این خط اضافه شد
+
     await this.saveGame(game)
     await this.scheduleNextAlarm(game)
     await this.broadcast()
@@ -537,7 +553,7 @@ export class RoomDO {
     if (game.origin === 'matchmaking') {
       game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
       await this.syncRoomStatusToD1(game) // الان هنوز roomPhase='playing'، status رو همونجوری نگه می‌داریم تا alarm برگردوندش به waiting
-    } 
+    }
     // else {
     //   if (game.roomId) {
     //     const db = getDb(this.env.DB)
@@ -549,49 +565,49 @@ export class RoomDO {
 
 
   // این تابع کامل بازنویسی شد — حالا واقعاً پایان دست رو هم مدیریت می‌کنه
-private async forceLeaveDueToDisconnect(game: GameState, userId: number): Promise<boolean> {
-  const player = game.players.find((p) => p.userId === userId)
-  if (!player) return false
+  private async forceLeaveDueToDisconnect(game: GameState, userId: number): Promise<boolean> {
+    const player = game.players.find((p) => p.userId === userId)
+    if (!player) return false
 
-  const wasPlaying = game.roomPhase === 'playing' && game.phase !== 'waiting_for_players' && game.phase !== 'game_over'
+    const wasPlaying = game.roomPhase === 'playing' && game.phase !== 'waiting_for_players' && game.phase !== 'game_over'
 
-  player.revealed = player.roles.map(() => true)
-  game.log.push(`${player.firstName} به‌خاطر قطعی طولانی از بازی خارج شد`)
+    player.revealed = player.roles.map(() => true)
+    game.log.push(`${player.firstName} به‌خاطر قطعی طولانی از بازی خارج شد`)
 
-  if (game.roomId) {
-    const db = getDb(this.env.DB)
-    await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
-    await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+      await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+    }
+
+    game.players = game.players.filter((p) => p.userId !== userId)
+    game.turnOrder = game.turnOrder.filter((id) => id !== userId)
+
+    // اگه این بازیکن وسط یه pendingAction/reveal/selection/anarchist بود، اون‌ها رو پاک کن که گیر نکنیم
+    if (game.revealPending?.playerId === userId) game.revealPending = null
+    if (game.provePending?.playerId === userId || game.provePending?.challengerId === userId) game.provePending = null
+    if (game.selectionPending?.playerId === userId) game.selectionPending = null
+    if (game.anarchistPending && (game.anarchistPending.originalAttackerId === userId || game.anarchistPending.currentTargetId === userId)) {
+      game.anarchistPending = null
+    }
+    if (game.pendingAction && (game.pendingAction.actorId === String(userId) || game.pendingAction.targetId === String(userId))) {
+      game.pendingAction = null
+    }
+
+    if (!wasPlaying) return false
+
+    const alivePlayers = game.players.filter((p) => !isEliminated(p))
+    if (alivePlayers.length <= 1) {
+      game.phase = 'game_over'
+      game.winnerId = alivePlayers[0]?.userId ?? null
+      return true
+    }
+
+    if (game.turnOrder.length > 0 && game.currentTurnIndex >= game.turnOrder.length) {
+      game.currentTurnIndex = 0
+    }
+    return false
   }
-
-  game.players = game.players.filter((p) => p.userId !== userId)
-  game.turnOrder = game.turnOrder.filter((id) => id !== userId)
-
-  // اگه این بازیکن وسط یه pendingAction/reveal/selection/anarchist بود، اون‌ها رو پاک کن که گیر نکنیم
-  if (game.revealPending?.playerId === userId) game.revealPending = null
-  if (game.provePending?.playerId === userId || game.provePending?.challengerId === userId) game.provePending = null
-  if (game.selectionPending?.playerId === userId) game.selectionPending = null
-  if (game.anarchistPending && (game.anarchistPending.originalAttackerId === userId || game.anarchistPending.currentTargetId === userId)) {
-    game.anarchistPending = null
-  }
-  if (game.pendingAction && (game.pendingAction.actorId === String(userId) || game.pendingAction.targetId === String(userId))) {
-    game.pendingAction = null
-  }
-
-  if (!wasPlaying) return false
-
-  const alivePlayers = game.players.filter((p) => !isEliminated(p))
-  if (alivePlayers.length <= 1) {
-    game.phase = 'game_over'
-    game.winnerId = alivePlayers[0]?.userId ?? null
-    return true
-  }
-
-  if (game.turnOrder.length > 0 && game.currentTurnIndex >= game.turnOrder.length) {
-    game.currentTurnIndex = 0
-  }
-  return false
-}
 
   private async closeRoom(game: GameState, requesterId: number) {
     if (game.creatorId !== requesterId) return
