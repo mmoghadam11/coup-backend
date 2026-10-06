@@ -16,14 +16,20 @@ function pct(numerator: number, denominator: number): number {
 
 export function buildRadarSvg(firstName: string, stats: PlayerStatsRow): string {
   const winRate = pct(stats.total_wins, stats.total_games)
-  const bluffSuccessRate = pct(stats.total_successful_bluffs, stats.total_successful_bluffs + stats.total_caught_bluffs)
-  const challengeSuccessRate = pct(stats.total_correct_challenges, stats.total_correct_challenges + stats.total_wrong_challenges)
+  const bluffSuccessRate = pct(
+    stats.total_successful_bluffs,
+    stats.total_successful_bluffs + stats.total_caught_bluffs
+  )
+  const challengeSuccessRate = pct(
+    stats.total_correct_challenges,
+    stats.total_correct_challenges + stats.total_wrong_challenges
+  )
   const aggressionRate = pct(stats.total_kills + stats.total_coups, stats.total_games * 2)
 
   const axes = [
     { label: 'برد', value: winRate },
-    { label: 'بلوف موفق', value: bluffSuccessRate },
-    { label: 'تشخیص بلوف', value: challengeSuccessRate },
+    { label: 'بلوف', value: bluffSuccessRate },
+    { label: 'چالش', value: challengeSuccessRate },
     { label: 'تهاجم', value: aggressionRate },
   ]
 
@@ -41,11 +47,9 @@ export function buildRadarSvg(firstName: string, stats: PlayerStatsRow): string 
     }
   }
 
-  // چندضلعی اصلی (مقدار واقعی هر محور)
   const dataPoints = axes.map((axis, i) => pointAt(i, axis.value))
   const dataPolygon = dataPoints.map((p) => `${p.x},${p.y}`).join(' ')
 
-  // خطوط راهنمای هر محور (از مرکز تا ۱۰۰٪)
   const axisLines = axes
     .map((_, i) => {
       const outer = pointAt(i, 100)
@@ -53,15 +57,18 @@ export function buildRadarSvg(firstName: string, stats: PlayerStatsRow): string 
     })
     .join('')
 
-  // برچسب هر محور
+  // ✅ فقط دو خط متن: label بالا، درصد پایین
   const labels = axes
     .map((axis, i) => {
-      const labelPoint = pointAt(i, 118)
-      return `<text x="${labelPoint.x}" y="${labelPoint.y}" fill="#fff" font-size="14" text-anchor="middle" dominant-baseline="middle">${axis.label} ${axis.value}٪</text>`
+      const base = pointAt(i, 120)
+
+      return `
+        <text x="${base.x}" y="${base.y}" fill="#fff" font-size="15" font-family="Vazirmatn" text-anchor="middle" font-weight="bold">${axis.label}</text>
+        <text x="${base.x}" y="${base.y + 18}" fill="#e0a52f" font-size="13" font-family="Vazirmatn" text-anchor="middle" font-weight="bold">${axis.value}%</text>
+      `
     })
     .join('')
 
-  // حلقه‌های راهنما (۲۵٪, ۵۰٪, ۷۵٪, ۱۰۰٪)
   const grids = [25, 50, 75, 100]
     .map((percent) => {
       const points = axes.map((_, i) => pointAt(i, percent))
@@ -71,9 +78,9 @@ export function buildRadarSvg(firstName: string, stats: PlayerStatsRow): string 
     .join('')
 
   return `
-<svg width="${size}" height="${size + 40}" viewBox="0 0 ${size} ${size + 40}" xmlns="http://www.w3.org/2000/svg">
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
   <rect width="100%" height="100%" fill="#1a120b" />
-  <text x="${center}" y="30" fill="#e0a52f" font-size="20" font-weight="bold" text-anchor="middle">پنجره‌ی قدرت ${firstName}</text>
+  <text x="${center}" y="30" fill="#e0a52f" font-size="20" font-family="Vazirmatn" font-weight="bold" text-anchor="middle">پنجره‌ی قدرت ${firstName}</text>
   <g transform="translate(0, 20)">
     ${grids}
     ${axisLines}

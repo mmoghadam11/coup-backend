@@ -94,6 +94,7 @@ botWebhookRoutes.get('/radar/:userId', async (c) => {
 
   if (!row) return c.text('not found', 404)
 
+  // const svg = buildRadarSvg(row.first_name ?? 'بازیکن', row)
   const svg = buildRadarSvg(row.first_name ?? 'بازیکن', row)
   return c.body(svg, 200, { 'Content-Type': 'image/svg+xml' })
 })
