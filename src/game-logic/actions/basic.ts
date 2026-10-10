@@ -18,6 +18,6 @@ export function applyCoup(game: GameState, actorId: number, targetId: number): {
   actor.coins -= actionCost('coup')
   actor.stats.coups += 1   // فقط کودتا، جدا از kills
   game.log.push(`${actor.firstName} کودتا کرد`)
-  game.revealPending = { playerId: targetId, reason: 'coup' }
+  game.revealPending = { playerId: targetId, reason: 'coup', actorId }
   return {}
 }

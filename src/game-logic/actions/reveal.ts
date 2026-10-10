@@ -1,8 +1,16 @@
 import { GameState, isEliminated } from '../state'
 import { advanceTurn } from '../turns'
+import { RoleName } from '../types'
 import { resolvePendingActionEffect } from './challengeFlow'
 
-export function revealCard(game: GameState, userId: number, roleIndex: number): { gameJustEnded: boolean } {
+export interface RevealCardResult {
+  gameJustEnded: boolean
+  revealedRole?: RoleName
+  playerName?: string
+  eliminated?: boolean
+}
+
+export function revealCard(game: GameState, userId: number, roleIndex: number): RevealCardResult {
   if (!game.revealPending || game.revealPending.playerId !== userId) {
     return { gameJustEnded: false }
   }
@@ -12,11 +20,13 @@ export function revealCard(game: GameState, userId: number, roleIndex: number): 
     return { gameJustEnded: false }
   }
 
+  const revealedRole = player.roles[roleIndex]
   player.revealed[roleIndex] = true
-  game.log.push(`${player.firstName} یکی از کارت‌هاش رو کور کرد`)
+  game.log.push(`${player.firstName} یکی از کارت‌هاش رو کشت`)
   game.revealPending = null
 
-  if (isEliminated(player)) {
+  const eliminated = isEliminated(player)
+  if (eliminated) {
     game.log.push(`${player.firstName} حذف شد`)
   }
 
@@ -25,23 +35,23 @@ export function revealCard(game: GameState, userId: number, roleIndex: number): 
     game.phase = 'game_over'
     game.winnerId = alivePlayers[0].userId
     game.log.push(`${alivePlayers[0].firstName} برنده‌ی بازی شد!`)
-    return { gameJustEnded: true }
+    return { gameJustEnded: true, revealedRole, playerName: player.firstName, eliminated }
   }
 
   if (game.pendingAction) {
     resolvePendingActionEffect(game)
-    return { gameJustEnded: false }
+    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
   }
 
   if (game.selectionPending) {
-    return { gameJustEnded: false }
+    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
   }
 
   if (game.anarchistPending) {
     game.phase = 'anarchist_in_progress'
-    return { gameJustEnded: false }
+    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
   }
 
   advanceTurn(game)
-  return { gameJustEnded: false }
+  return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
 }

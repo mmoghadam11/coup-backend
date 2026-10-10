@@ -207,7 +207,7 @@ export function resolvePendingActionEffect(game: GameState) {
     case 'assassinate':
       if (target) {
         actor.stats.kills += 1   // فقط قاتل
-        game.revealPending = { playerId: target.userId, reason: 'assassinated' }
+        game.revealPending = { playerId: target.userId, reason: 'assassinated', actorId: actor.userId }
       }
       break
     case 'exchange':

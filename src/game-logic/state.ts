@@ -47,6 +47,7 @@ export interface InternalPlayer {
 export interface RevealPending {
   playerId: number
   reason: string
+  actorId?: number // این خط اضافه شد — کی باعث این reveal شده (برای نمایش پیام)
 }
 
 export interface ProvePending {

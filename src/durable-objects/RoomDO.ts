@@ -139,6 +139,7 @@ export class RoomDO {
 
     const game = await this.getGame()
     let proofEvent: { playerId: string; playerName: string; role: string; success: boolean } | null = null
+    let revealResultEvent: { playerId: string; playerName: string; role: string; eliminated: boolean } | null = null
     let shouldWipeAfterBroadcast = false
 
     switch (data.type) {
@@ -209,11 +210,16 @@ export class RoomDO {
       }
       case 'reveal_card': {
         const result = revealCard(game, userId, data.roleIndex)
-        if (result.gameJustEnded && game.roomId) {
-          // const db = getDb(this.env.DB)
-          // await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-          // await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
+        if (result.gameJustEnded) {
           await this.onHandEnded(game)
+        }
+        if (result.revealedRole) {
+          revealResultEvent = {
+            playerId: String(userId),
+            playerName: result.playerName!,
+            role: result.revealedRole,
+            eliminated: !!result.eliminated,
+          }
         }
         break
       }
@@ -292,6 +298,12 @@ export class RoomDO {
     // این بخش جدید: یه پیام یک‌باره (نه بخشی از state دائمی) به همه بفرست
     if (proofEvent) {
       const payload = JSON.stringify({ type: 'proof_result', result: proofEvent })
+      for (const ws of this.state.getWebSockets()) {
+        ws.send(payload)
+      }
+    }
+    if (revealResultEvent) {
+      const payload = JSON.stringify({ type: 'reveal_result', result: revealResultEvent })
       for (const ws of this.state.getWebSockets()) {
         ws.send(payload)
       }

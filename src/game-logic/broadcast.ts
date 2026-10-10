@@ -28,7 +28,7 @@ export function buildPublicPayload(game: GameState) {
       log: game.log.slice(-100),
       pendingAction: game.pendingAction,
       revealPending: game.revealPending
-        ? { playerId: String(game.revealPending.playerId), reason: game.revealPending.reason }
+        ? { playerId: String(game.revealPending.playerId), reason: game.revealPending.reason, actorId: game.revealPending.actorId ? String(game.revealPending.actorId) : null, }
         : null,
       provePending: game.provePending
         ? { playerId: String(game.provePending.playerId), claimedRole: game.provePending.claimedRole }

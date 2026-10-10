@@ -28,7 +28,7 @@ export function respondToAnarchist(game: GameState, userId: number, response: 'a
 
   if (response === 'allow') {
     game.log.push('حمله‌ی آنارشیست بدون بلاک قبول شد')
-    game.revealPending = { playerId: userId, reason: 'anarchist' }
+    game.revealPending = { playerId: userId, reason: 'anarchist', actorId: ap.originalAttackerId }
     game.anarchistPending = null
     return
   }
