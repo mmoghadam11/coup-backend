@@ -1,57 +1,22 @@
 import { GameState, isEliminated } from '../state'
-import { advanceTurn } from '../turns'
-import { RoleName } from '../types'
-import { resolvePendingActionEffect } from './challengeFlow'
+import { startShowcase } from './showcase'
+import { REVEAL_SHOWCASE_SECONDS } from '../matchmakingConfig'
 
-export interface RevealCardResult {
-  gameJustEnded: boolean
-  revealedRole?: RoleName
-  playerName?: string
-  eliminated?: boolean
-}
-
-export function revealCard(game: GameState, userId: number, roleIndex: number): RevealCardResult {
-  if (!game.revealPending || game.revealPending.playerId !== userId) {
-    return { gameJustEnded: false }
-  }
+export function revealCard(game: GameState, userId: number, roleIndex: number): { ok: boolean } {
+  if (!game.revealPending || game.revealPending.playerId !== userId) return { ok: false }
 
   const player = game.players.find((p) => p.userId === userId)
-  if (!player || player.revealed[roleIndex]) {
-    return { gameJustEnded: false }
-  }
+  if (!player || player.revealed[roleIndex]) return { ok: false }
 
-  const revealedRole = player.roles[roleIndex]
+  const role = player.roles[roleIndex]
   player.revealed[roleIndex] = true
   game.log.push(`${player.firstName} یکی از کارت‌هاش رو کشت`)
   game.revealPending = null
 
   const eliminated = isEliminated(player)
-  if (eliminated) {
-    game.log.push(`${player.firstName} حذف شد`)
-  }
+  if (eliminated) game.log.push(`${player.firstName} حذف شد`)
 
-  const alivePlayers = game.players.filter((p) => !isEliminated(p))
-  if (alivePlayers.length === 1) {
-    game.phase = 'game_over'
-    game.winnerId = alivePlayers[0].userId
-    game.log.push(`${alivePlayers[0].firstName} برنده‌ی بازی شد!`)
-    return { gameJustEnded: true, revealedRole, playerName: player.firstName, eliminated }
-  }
-
-  if (game.pendingAction) {
-    resolvePendingActionEffect(game)
-    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
-  }
-
-  if (game.selectionPending) {
-    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
-  }
-
-  if (game.anarchistPending) {
-    game.phase = 'anarchist_in_progress'
-    return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
-  }
-
-  advanceTurn(game)
-  return { gameJustEnded: false, revealedRole, playerName: player.firstName, eliminated }
+  // دیگه اینجا game_over نمی‌شه؛ اول نمایش کارت، بعد continueFlow
+  startShowcase(game, { kind: 'reveal', playerId: userId, role, eliminated }, REVEAL_SHOWCASE_SECONDS)
+  return { ok: true }
 }

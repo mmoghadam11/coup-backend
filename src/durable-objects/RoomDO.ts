@@ -27,6 +27,7 @@ import { recordGameResult } from '../db/matchStats'
 import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, registerDisconnect } from '../game-logic/disconnectManager'
 import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic/matchmakingConfig'
 import { foldHand, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
+import { continueFlow } from '../game-logic/actions/showcase'
 
 type Env = { DB: D1Database }
 
@@ -138,8 +139,10 @@ export class RoomDO {
     }
 
     const game = await this.getGame()
-    let proofEvent: { playerId: string; playerName: string; role: string; success: boolean } | null = null
-    let revealResultEvent: { playerId: string; playerName: string; role: string; eliminated: boolean } | null = null
+    // let proofEvent: { playerId: string; playerName: string; role: string; success: boolean } | null = null
+    // let revealResultEvent: { playerId: string; playerName: string; role: string; eliminated: boolean } | null = null
+    const ALLOWED_DURING_SHOWCASE = ['chat', 'mm_leave', 'leave_room', 'close_room', 'force_reset']
+    if (game.showcase && !ALLOWED_DURING_SHOWCASE.includes(data.type)) return
     let shouldWipeAfterBroadcast = false
 
     switch (data.type) {
@@ -189,40 +192,12 @@ export class RoomDO {
         }
         break
       }
-      case 'prove_card': {
-        const claimer = game.players.find((p) => p.userId === userId)
-        const result = provideProof(game, userId, data.roleIndex)
-        if (result.gameJustEnded && game.roomId) {
-          // const db = getDb(this.env.DB)
-          // await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-          // await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
-          await this.onHandEnded(game)
-        }
-        if (result.shownRole && claimer) {
-          proofEvent = {
-            playerId: String(userId),
-            playerName: claimer.firstName,
-            role: result.shownRole,
-            success: !!result.success,
-          }
-        }
+      case 'prove_card':
+        provideProof(game, userId, data.roleIndex)
         break
-      }
-      case 'reveal_card': {
-        const result = revealCard(game, userId, data.roleIndex)
-        if (result.gameJustEnded) {
-          await this.onHandEnded(game)
-        }
-        if (result.revealedRole) {
-          revealResultEvent = {
-            playerId: String(userId),
-            playerName: result.playerName!,
-            role: result.revealedRole,
-            eliminated: !!result.eliminated,
-          }
-        }
+      case 'reveal_card':
+        revealCard(game, userId, data.roleIndex)
         break
-      }
       case 'exchange_select':
         confirmExchangeSelection(game, userId, data.keepIndexes)
         if (!game.selectionPending) advanceTurn(game)
@@ -296,18 +271,18 @@ export class RoomDO {
     await this.scheduleNextAlarm(game)   // ✅ این خط
     await this.broadcast()
     // این بخش جدید: یه پیام یک‌باره (نه بخشی از state دائمی) به همه بفرست
-    if (proofEvent) {
-      const payload = JSON.stringify({ type: 'proof_result', result: proofEvent })
-      for (const ws of this.state.getWebSockets()) {
-        ws.send(payload)
-      }
-    }
-    if (revealResultEvent) {
-      const payload = JSON.stringify({ type: 'reveal_result', result: revealResultEvent })
-      for (const ws of this.state.getWebSockets()) {
-        ws.send(payload)
-      }
-    }
+    // if (proofEvent) {
+    //   const payload = JSON.stringify({ type: 'proof_result', result: proofEvent })
+    //   for (const ws of this.state.getWebSockets()) {
+    //     ws.send(payload)
+    //   }
+    // }
+    // if (revealResultEvent) {
+    //   const payload = JSON.stringify({ type: 'reveal_result', result: revealResultEvent })
+    //   for (const ws of this.state.getWebSockets()) {
+    //     ws.send(payload)
+    //   }
+    // }
     if (shouldWipeAfterBroadcast) {
       await this.state.storage.deleteAll()
     }
@@ -363,6 +338,8 @@ export class RoomDO {
     if (game.phase !== 'awaiting_action') return { error: 'الان نوبت اکشن نیست' }
     if (game.turnOrder[game.currentTurnIndex] !== userId) return { error: 'نوبت شما نیست' }
 
+    if (game.showcase || game.revealPending) return { error: 'لطفاً صبر کنید' }
+    if (game.phase !== 'awaiting_action') return { error: 'الان نوبت اکشن نیست' }
     if (action === 'income') {
       applyIncome(game, userId)
       advanceTurn(game)
@@ -454,6 +431,9 @@ export class RoomDO {
       payload.private.exchangePool = game.selectionPending.pool
       payload.private.exchangeKeepCount = game.selectionPending.keepCount
     }
+    if (game.showcase?.kind === 'replacement' && game.showcase.playerId === userId) {
+      payload.private.replacedIndex = game.showcase.replacedIndex
+    }
     ws.send(JSON.stringify(payload))
   }
 
@@ -504,6 +484,11 @@ export class RoomDO {
   async alarm() {
     const game = await this.getGame()
 
+    if (game.showcase && Date.now() >= game.showcase.endsAt) {
+      const result = continueFlow(game)
+      if (result.gameJustEnded) await this.onHandEnded(game)
+    }
+
     if (game.roomPhase === 'starting' && game.countdownEndsAt && Date.now() >= game.countdownEndsAt) {
       startMatchmakingHand(game)
       await this.syncRoomStatusToD1(game)
@@ -543,6 +528,7 @@ export class RoomDO {
     if (game.handResultEndsAt) candidates.push(game.handResultEndsAt)
     const nextDisconnect = getNextDisconnectDeadline(game)
     if (nextDisconnect) candidates.push(nextDisconnect)
+    if (game.showcase) candidates.push(game.showcase.endsAt)
 
     if (candidates.length === 0) {
       await this.state.storage.deleteAlarm()
@@ -596,6 +582,7 @@ export class RoomDO {
     game.turnOrder = game.turnOrder.filter((id) => id !== userId)
 
     // اگه این بازیکن وسط یه pendingAction/reveal/selection/anarchist بود، اون‌ها رو پاک کن که گیر نکنیم
+    if (game.pendingReplacement?.playerId === userId) game.pendingReplacement = null
     if (game.revealPending?.playerId === userId) game.revealPending = null
     if (game.provePending?.playerId === userId || game.provePending?.challengerId === userId) game.provePending = null
     if (game.selectionPending?.playerId === userId) game.selectionPending = null

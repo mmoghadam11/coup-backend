@@ -55,6 +55,16 @@ export function buildPublicPayload(game: GameState) {
         }
         : null,
       winnerId: game.winnerId ? String(game.winnerId) : null,
+      showcase: game.showcase
+        ? {
+          kind: game.showcase.kind,
+          playerId: String(game.showcase.playerId),
+          role: game.showcase.role ?? null,          // برای replacement همیشه null؛ کارت جدید لو نمی‌ره
+          success: game.showcase.success ?? null,
+          eliminated: game.showcase.eliminated ?? null,
+          endsAt: game.showcase.endsAt,
+        }
+        : null,
     },
   }
 }

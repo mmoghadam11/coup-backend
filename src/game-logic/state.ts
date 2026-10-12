@@ -77,6 +77,23 @@ export interface RestartVoteState {
   responses: Record<string, 'stay' | 'leave'>
 }
 
+export type ShowcaseKind = 'proof' | 'reveal' | 'replacement'
+
+export interface Showcase {
+  kind: ShowcaseKind
+  playerId: number
+  role?: RoleName          // proof/reveal: نقش نمایش‌داده‌شده (عمومیه)
+  success?: boolean        // فقط proof
+  eliminated?: boolean     // فقط reveal
+  replacedIndex?: number   // فقط replacement؛ خصوصیه و توی payload عمومی نمی‌ره
+  endsAt: number
+}
+
+export interface PendingReplacement {
+  playerId: number
+  roleIndex: number
+}
+
 export interface GameState {
   roomId: string | null
   roomName: string | null
@@ -99,6 +116,9 @@ export interface GameState {
   anarchistPending: AnarchistPending | null
   restartVote: RestartVoteState | null
   winnerId: number | null
+
+  showcase: Showcase | null                   // جدید
+  pendingReplacement: PendingReplacement | null
 
   disconnectDeadlines: Record<string, number>
   foldedThisHand: number[]   // این خط اضافه شد — بازیکنانی که این دست fold کردن (برای matchmaking/هر روم چندباره)
@@ -128,6 +148,8 @@ export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
     anarchistPending: null,
     restartVote: null,
     winnerId: null,
+    showcase: null,
+    pendingReplacement: null,
     disconnectDeadlines: {},
     foldedThisHand: [],
     // pendingAlarm: null,

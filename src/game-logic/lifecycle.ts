@@ -19,6 +19,8 @@ export function dealNewGame(game: GameState) {
   game.revealPending = null
   game.provePending = null
   game.anarchistPending = null
+  game.showcase = null
+  game.pendingReplacement = null
 }
 
 export function resetToWaiting(game: GameState) {
@@ -37,6 +39,8 @@ export function resetToWaiting(game: GameState) {
   game.revealPending = null
   game.provePending = null
   game.anarchistPending = null
+  game.showcase = null
+  game.pendingReplacement = null
 }
 
 export function forceResetGame(game: GameState) {
