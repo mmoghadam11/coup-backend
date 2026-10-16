@@ -1,5 +1,6 @@
 import { GameState, isEliminated } from '../state'
-import { startShowcase } from './showcase'
+// import { startShowcase } from './showcase'
+import { startShowcase } from './showcaseCore'
 import { REVEAL_SHOWCASE_SECONDS } from '../matchmakingConfig'
 
 export function revealCard(game: GameState, userId: number, roleIndex: number): { ok: boolean } {

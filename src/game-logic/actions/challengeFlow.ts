@@ -3,15 +3,23 @@ import { ActionType, RoleName } from '../types'
 import { ACTION_TO_ROLE, BLOCKING_ROLES, actionCost } from '../roles'
 import { advanceTurn } from '../turns'
 import { startContessaSelection, startExchangeSelection } from './selection'
+import { replaceCardFromDeck } from './showcaseCore'
 
 export function startChallengeableAction(
   game: GameState,
   actorId: number,
   action: ActionType,
-  targetId?: string
+  targetId?: string,
+  claimedCardIndex?: number
 ): { error?: string } {
   const actor = game.players.find((p) => p.userId === actorId)
   if (!actor) return { error: 'بازیکن پیدا نشد' }
+
+  if (action === 'contessa_self') {
+    if (claimedCardIndex === undefined || !actor.roles[claimedCardIndex] || actor.revealed[claimedCardIndex]) {
+      return { error: 'اول باید کارتی که ادعای بازرس بودنش رو دارید انتخاب کنید' }
+    }
+  }
 
   const cost = actionCost(action)
   if (cost > 0 && actor.coins < cost) {
@@ -27,6 +35,7 @@ export function startChallengeableAction(
     action,
     targetId,
     claimedRole,
+    claimedCardIndex: action === 'contessa_self' ? claimedCardIndex : undefined,
     awaitingResponseFrom: others.map((p) => String(p.userId)),
     responses: {},
     createdAt: Date.now(),
@@ -55,7 +64,14 @@ export function respondToAction(game: GameState, userId: number, response: 'allo
   if (allResponded) {
     if (pending.claimedRole) {
       const actor = game.players.find((p) => p.userId === Number(pending.actorId))
-      const actuallyHasRole = actor?.roles.some((r, i) => r === pending.claimedRole && !actor.revealed[i])
+      /**
+       * @description برای حالت بازرس باید همون کارت انتخاب‌شده رو بسنجه
+       */
+      // const actuallyHasRole = actor?.roles.some((r, i) => r === pending.claimedRole && !actor.revealed[i])
+      const actuallyHasRole =
+        pending.claimedCardIndex !== undefined
+          ? actor?.roles[pending.claimedCardIndex] === pending.claimedRole
+          : actor?.roles.some((r, i) => r === pending.claimedRole && !actor.revealed[i])
       if (actor && !actuallyHasRole) {
         actor.stats.successfulBluffs += 1
       }
@@ -213,8 +229,14 @@ export function resolvePendingActionEffect(game: GameState) {
     case 'exchange':
       startExchangeSelection(game, actor.userId)
       break
+    // case 'contessa_self':
+    //   startContessaSelection(game, actor.userId)
+    //   break
     case 'contessa_self':
-      startContessaSelection(game, actor.userId)
+      // اگه حین اثبات تعویض شده، کاری نمی‌مونه؛ وگرنه (چالشی نبود) همین‌جا تعویض می‌شه
+      if (!pending.selfSwapDone && pending.claimedCardIndex !== undefined) {
+        replaceCardFromDeck(game, actor.userId, pending.claimedCardIndex, { shuffleDeck: false })
+      }
       break
     case 'contessa_other':
       if (target) startContessaSelection(game, target.userId)
@@ -222,7 +244,7 @@ export function resolvePendingActionEffect(game: GameState) {
   }
 
   game.pendingAction = null
-  if (!game.revealPending && !game.selectionPending) {
+  if (!game.revealPending && !game.selectionPending && !game.showcase) {
     advanceTurn(game)
   }
 }

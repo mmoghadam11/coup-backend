@@ -155,7 +155,8 @@ export class RoomDO {
         await this.startGame(game, userId)
         break
       case 'action': {
-        const result = this.dispatchAction(game, userId, data.action, data.targetId)
+        // const result = this.dispatchAction(game, userId, data.action, data.targetId)
+        const result = this.dispatchAction(game, userId, data.action, data.targetId, data.cardIndex)
         if (result?.error) {
           ws.send(JSON.stringify({ type: 'error', message: result.error }))
         }
@@ -205,7 +206,7 @@ export class RoomDO {
       case 'contessa_self_select':
       case 'contessa_other_select':
         confirmContessaSelection(game, userId, data.roleIndex)
-        if (!game.selectionPending) advanceTurn(game)
+        if (!game.selectionPending && !game.showcase) advanceTurn(game)
         break
       case 'restart_game':
         await this.beginRestartVote(game, userId, data.reopenForJoining)
@@ -334,7 +335,7 @@ export class RoomDO {
     }
   }
 
-  private dispatchAction(game: GameState, userId: number, action: string, targetId?: string): { error?: string } | void {
+  private dispatchAction(game: GameState, userId: number, action: string, targetId?: string, cardIndex?: number): { error?: string } | void {
     if (game.phase !== 'awaiting_action') return { error: 'الان نوبت اکشن نیست' }
     if (game.turnOrder[game.currentTurnIndex] !== userId) return { error: 'نوبت شما نیست' }
 
@@ -353,7 +354,7 @@ export class RoomDO {
       if (!targetId) return { error: 'هدف مشخص نشده' }
       return startAnarchistAttack(game, userId, Number(targetId))
     }
-    return startChallengeableAction(game, userId, action as any, targetId)
+    return startChallengeableAction(game, userId, action as any, targetId, cardIndex)
   }
 
   private async beginRestartVote(game: GameState, requesterId: number, reopenForJoining: boolean) {
@@ -433,6 +434,13 @@ export class RoomDO {
     }
     if (game.showcase?.kind === 'replacement' && game.showcase.playerId === userId) {
       payload.private.replacedIndex = game.showcase.replacedIndex
+    }
+    if (
+      game.provePending?.playerId === userId &&
+      game.provePending.context === 'action' &&
+      game.pendingAction?.action === 'contessa_self'
+    ) {
+      payload.private.forcedProofIndex = game.pendingAction.claimedCardIndex
     }
     ws.send(JSON.stringify(payload))
   }

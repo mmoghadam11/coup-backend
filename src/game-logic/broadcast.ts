@@ -26,7 +26,10 @@ export function buildPublicPayload(game: GameState) {
       currentTurnIndex: game.currentTurnIndex,
       deckCount: game.deck.length,
       log: game.log.slice(-100),
-      pendingAction: game.pendingAction,
+      // pendingAction: game.pendingAction,
+      pendingAction: game.pendingAction
+        ? (({ claimedCardIndex, selfSwapDone, ...publicPart }) => publicPart)(game.pendingAction)
+        : null,
       revealPending: game.revealPending
         ? { playerId: String(game.revealPending.playerId), reason: game.revealPending.reason, actorId: game.revealPending.actorId ? String(game.revealPending.actorId) : null, }
         : null,
@@ -63,6 +66,7 @@ export function buildPublicPayload(game: GameState) {
           success: game.showcase.success ?? null,
           eliminated: game.showcase.eliminated ?? null,
           endsAt: game.showcase.endsAt,
+          shuffle: game.showcase.shuffle ?? false,
         }
         : null,
     },

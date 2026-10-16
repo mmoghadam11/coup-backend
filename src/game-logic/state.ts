@@ -87,6 +87,7 @@ export interface Showcase {
   eliminated?: boolean     // فقط reveal
   replacedIndex?: number   // فقط replacement؛ خصوصیه و توی payload عمومی نمی‌ره
   endsAt: number
+  shuffle?: boolean
 }
 
 export interface PendingReplacement {

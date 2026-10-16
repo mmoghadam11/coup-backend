@@ -35,6 +35,9 @@ export interface PendingAction {
   blockedBy?: { playerId: string; claimedRole: RoleName }
   blockChallengeResponses?: Record<string, 'allow' | 'challenge'>
   createdAt: number
+
+  claimedCardIndex?: number  // فقط برای contessa_self، خصوصیه
+  selfSwapDone?: boolean     // تعویض حین اثبات انجام شده
 }
 
 // ---- زنجیره‌ی حمله‌ی آنارشیست (مکانیزم مخصوص این بازی) ----
@@ -44,9 +47,9 @@ export interface AnarchistAttack {
   currentTargetId: string      // کارت الان دست کیه
   previousHolders: string[]    // همه‌ی کسایی که قبلاً کارت رو داشتن (برای exclude کردن از pass بعدی)
   status:
-    | 'awaiting_block_response'      // منتظریم currentTarget تصمیم بگیره: بلاک کنه (ادعای شاهدخت) یا نه
-    | 'awaiting_challenge_on_block'  // یکی ادعای شاهدخت کرد، منتظر challenge از بقیه
-    | 'awaiting_pass_target'         // بلاک موفق شد، منتظریم مدافع هدف بعدی رو انتخاب کنه
+  | 'awaiting_block_response'      // منتظریم currentTarget تصمیم بگیره: بلاک کنه (ادعای شاهدخت) یا نه
+  | 'awaiting_challenge_on_block'  // یکی ادعای شاهدخت کرد، منتظر challenge از بقیه
+  | 'awaiting_pass_target'         // بلاک موفق شد، منتظریم مدافع هدف بعدی رو انتخاب کنه
   claimedBlockRole?: RoleName        // همیشه 'princess' وقتی بلاک می‌شه
   blockChallengeResponses?: Record<string, 'allow' | 'challenge'>
   createdAt: number

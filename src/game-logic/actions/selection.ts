@@ -1,11 +1,18 @@
 import { GameState, shuffle } from '../state'
+import { RoleName } from '../types'
+import { replaceCardFromDeck } from './showcaseCore'
 
 // ambassador: actor کارت‌های فعلیش + ۲ کارت جدید رو می‌بینه، باید همون تعداد قبلی رو نگه داره
 export function startExchangeSelection(game: GameState, actorId: number) {
   const actor = game.players.find((p) => p.userId === actorId)
   if (!actor) return
 
-  const drawn = [game.deck.pop()!, game.deck.pop()!]
+  //فقط کارت‌هایی که واقعاً موجودن برداشته بشن، چون با ۷ نفر ممکنه دسته کمتر از دو کارت داشته باشه و pop() مقدار undefined بده
+  // const drawn = [game.deck.pop()!, game.deck.pop()!]
+  const drawn: RoleName[] = []
+  for (let i = 0; i < 2 && game.deck.length > 0; i++) {
+    drawn.push(game.deck.pop()!)
+  }
   const activeRoles = actor.roles.filter((_, i) => !actor.revealed[i])
   const pool = [...activeRoles, ...drawn]
 
@@ -25,8 +32,9 @@ export function confirmExchangeSelection(game: GameState, userId: number, keepIn
   const kept = keepIndexes.map((i) => sel.pool![i])
   const returned = sel.pool.filter((_, i) => !keepIndexes.includes(i))
 
-  game.deck.push(...returned)
-  game.deck = shuffle(game.deck)
+  // game.deck.push(...returned)
+  // game.deck = shuffle(game.deck)
+  game.deck.unshift(...returned) // کارت‌های اضافی زیر دسته، بدون بُر
 
   let k = 0
   actor.roles = actor.roles.map((r, i) => (actor.revealed[i] ? r : kept[k++]))
@@ -54,11 +62,14 @@ export function confirmContessaSelection(game: GameState, userId: number, roleIn
   if (!player || player.revealed[roleIndex]) return
 
   const oldRole = player.roles[roleIndex]
-  game.deck.push(oldRole)
-  game.deck = shuffle(game.deck)
-  player.roles[roleIndex] = game.deck.pop()!
+  // game.deck.push(oldRole)
+  // game.deck = shuffle(game.deck)
+  // game.deck.unshift(oldRole) // کارت‌های اضافی زیر دسته، بدون بُر
+  // player.roles[roleIndex] = game.deck.pop()!
 
   game.selectionPending = null
   game.phase = 'awaiting_action'
-  game.log.push(`${player.firstName} یکی از کارت‌هاش رو تعویض کرد`)
+  // کارت انتخابی زیر دسته می‌ره، کارت رویی میاد؛ نمایش تعویض برای همه
+  replaceCardFromDeck(game, userId, roleIndex, { shuffleDeck: false })
+  // game.log.push(`${player.firstName} یکی از کارت‌هاش رو تعویض کرد`)
 }
