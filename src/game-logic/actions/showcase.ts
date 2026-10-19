@@ -13,7 +13,15 @@ export function continueFlow(game: GameState): { gameJustEnded: boolean } {
     game.showcase = null
 
     // ۱. هنوز کسی باید یه کارت بسوزونه (مثلاً چالش‌گری که چالش رو باخته)
-    if (game.revealPending) return { gameJustEnded: false }
+    if (game.revealPending) {
+        const rp = game.players.find((p) => p.userId === game.revealPending!.playerId)
+        if (rp && !isEliminated(rp)) return { gameJustEnded: false } // هنوز کارت داره، منتظر انتخابش
+        game.revealPending = null // کارتی نمونده که بسوزه
+    }
+    if (game.selectionPending) {
+        const sp = game.players.find((p) => p.userId === game.selectionPending!.playerId)
+        if (!sp || isEliminated(sp)) game.selectionPending = null
+    }
 
     // ۲. پایان بازی — فقط اینجا و بعد از تموم شدن نمایش کارت‌ها ست می‌شه
     const alive = game.players.filter((p) => !isEliminated(p))
@@ -39,6 +47,7 @@ export function continueFlow(game: GameState): { gameJustEnded: boolean } {
     //       return { gameJustEnded: false }
     //     }
     //   }
+    //جایگزینی کارت ادعاکننده‌ی درست (بعد از سوختن کارت چالش‌گر)
     if (game.pendingReplacement) {
         const { playerId, roleIndex } = game.pendingReplacement
         game.pendingReplacement = null

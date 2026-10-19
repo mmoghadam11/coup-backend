@@ -21,6 +21,7 @@ export function dealNewGame(game: GameState) {
   game.anarchistPending = null
   game.showcase = null
   game.pendingReplacement = null
+  game.foldedThisHand = []
 }
 
 export function resetToWaiting(game: GameState) {

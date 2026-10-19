@@ -37,7 +37,16 @@ export function buildPublicPayload(game: GameState) {
         ? { playerId: String(game.provePending.playerId), claimedRole: game.provePending.claimedRole }
         : null,
       selectionPending: game.selectionPending
-        ? { playerId: String(game.selectionPending.playerId), mode: game.selectionPending.mode }
+        ? {
+          playerId: String(game.selectionPending.playerId),
+          mode: game.selectionPending.mode,
+          cardCount:
+            game.selectionPending.mode === 'exchange'
+              ? game.selectionPending.pool?.length ?? 0
+              : game.players
+                .find((p) => p.userId === game.selectionPending!.playerId)
+                ?.revealed.filter((r) => !r).length ?? 0,
+        }
         : null,
       anarchistPending: game.anarchistPending
         ? {

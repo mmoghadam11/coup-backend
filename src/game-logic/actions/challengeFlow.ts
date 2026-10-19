@@ -202,6 +202,15 @@ export function resolvePendingActionEffect(game: GameState) {
   }
   const target = pending.targetId ? game.players.find((p) => p.userId === Number(pending.targetId)) : undefined
 
+  // اکشن‌های هدف‌دار روی هدفی که دیگه کارتی نداره بی‌اثرن (مثل قانون اصلی Coup)
+  const needsLiveTarget = ['assassinate', 'steal', 'contessa_other'].includes(pending.action)
+  if (needsLiveTarget && (!target || isEliminated(target))) {
+    game.log.push('هدف قبلاً حذف شده؛ اکشن بی‌اثر شد')
+    game.pendingAction = null
+    if (!game.revealPending && !game.selectionPending && !game.showcase) advanceTurn(game)
+    return
+  }
+
   switch (pending.action) {
     case 'foreign_aid':
       actor.coins += 2
