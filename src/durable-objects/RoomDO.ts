@@ -26,7 +26,7 @@ import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAn
 import { recordGameResult } from '../db/matchStats'
 import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, registerDisconnect } from '../game-logic/disconnectManager'
 import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic/matchmakingConfig'
-import { foldHand, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
+import { foldHand, isQuietMoment, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 import { continueFlow } from '../game-logic/actions/showcase'
 
 type Env = { DB: D1Database }
@@ -219,40 +219,35 @@ export class RoomDO {
         break
       case 'fold': {
         const result = foldHand(game, userId)
-        if (result.handEnded) {
-          await this.onHandEnded(game)
-        }
+        if (result.error) ws.send(JSON.stringify({ type: 'error', message: result.error }))
+        if (result.handEnded) await this.onHandEnded(game)
         break
       }
       case 'mm_leave': {
-        if (game.origin === 'matchmaking') {
-          const wasPlaying = game.roomPhase === 'playing'
-          const player = game.players.find((p) => p.userId === userId)
-          const stillAlive = player && !player.revealed.every((r) => r)
+        if (game.origin !== 'matchmaking') break
 
+        // وسط دست فعال؛ شامل game_over نمی‌شه
+        const midHand = game.roomPhase === 'playing' && game.phase !== 'game_over'
+        if (midHand) {
+          const err = await this.leaveAtQuietMoment(game, userId)
+          if (err) { ws.send(JSON.stringify({ type: 'error', message: err })); break }
+        } else {
+          // waiting / starting / پنجره‌ی نتیجه‌ی دست
           removePlayerFromRoom(game, userId)
-
           if (game.roomId) {
             const db = getDb(this.env.DB)
             await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
             await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
           }
-
-          if (wasPlaying && stillAlive) {
-            const alivePlayers = game.players.filter((p) => !p.revealed.every((r) => r))
-            if (alivePlayers.length <= 1 && game.phase !== 'game_over') {
-              game.phase = 'game_over'
-              game.winnerId = alivePlayers[0]?.userId ?? null
-              await this.onHandEnded(game)
-            }
-          }
-
-          const transition = evaluateMatchmakingTransition(game)
-          await this.syncRoomStatusToD1(game)
-          if (transition.needsAlarmUpdate) {
-            // alarm پایین‌تر، بعد از switch، دوباره schedule می‌شه
-          }
         }
+
+        evaluateMatchmakingTransition(game)
+        await this.syncRoomStatusToD1(game)
+        break
+      }
+      case 'leave_table': {
+        const err = await this.leaveAtQuietMoment(game, userId)
+        if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
         break
       }
       case 'force_reset':
@@ -487,6 +482,36 @@ export class RoomDO {
     game.players = game.players.filter((p) => p.userId !== userId)
     game.turnOrder = game.turnOrder.filter((id) => id !== userId)
     game.log.push(`${player?.firstName ?? 'یک بازیکن'} از روم خارج شد`)
+  }
+
+  // خروج کامل بین دو اکشن؛ کارت‌ها باز می‌شن و بازیکن از روم و D1 حذف می‌شه
+  private async leaveAtQuietMoment(game: GameState, userId: number): Promise<string | null> {
+    const beforeStart = game.phase === 'waiting_for_players'
+    if (!beforeStart && !isQuietMoment(game)) return 'خروج فقط بین اکشن‌ها ممکنه'
+    if (game.origin !== 'matchmaking' && userId === game.creatorId) {
+      return 'سازنده نمی‌تونه خارج بشه؛ باید روم رو ببنده'
+    }
+    // const player = game.players.find((p) => p.userId === userId)
+    // if (!player) return null
+    if (!game.players.some((p) => p.userId === userId)) return null
+
+    let handEnded = false
+    if (!beforeStart) {
+      // اول مثل فولد: کارت‌ها باز می‌شن و اگه نوبتش بود، نوبت جلو می‌ره
+      const alive = game.players.some((p) => p.userId === userId && !isEliminated(p))
+      if (alive) handEnded = foldHand(game, userId).handEnded
+    }
+
+    removePlayerFromRoom(game, userId) // از players و turnOrder حذف می‌کنه
+    // if (game.currentTurnIndex >= game.turnOrder.length) game.currentTurnIndex = 0
+
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+      await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+    }
+    if (handEnded) await this.onHandEnded(game)
+    return null
   }
 
   async alarm() {

@@ -1,9 +1,20 @@
 import { GameState, isEliminated } from '../state'
 import { advanceTurn } from '../turns'
 
-export function foldHand(game: GameState, userId: number): { handEnded: boolean } {
-  if (game.roomPhase !== 'playing') return { handEnded: false }
-  if (game.phase === 'game_over') return { handEnded: false }
+// «لحظه‌ی آروم»: بین دو اکشن، بدون هیچ چالش یا نمایش نیمه‌کاره
+export function isQuietMoment(game: GameState): boolean {
+  return (
+    game.phase === 'awaiting_action' &&
+    !game.showcase &&
+    !game.revealPending &&
+    !game.selectionPending &&
+    !game.provePending &&
+    !game.pendingAction
+  )
+}
+
+export function foldHand(game: GameState, userId: number): { handEnded: boolean; error?: string  } {
+  if (!isQuietMoment(game)) return { handEnded: false, error: 'فولد فقط بین اکشن‌ها ممکنه' }
 
   const player = game.players.find((p) => p.userId === userId)
   if (!player || isEliminated(player)) return { handEnded: false }
@@ -31,6 +42,7 @@ export function foldHand(game: GameState, userId: number): { handEnded: boolean 
 export function removePlayerFromRoom(game: GameState, userId: number) {
   const player = game.players.find((p) => p.userId === userId)
   if (!player) return
+  const idx = game.turnOrder.indexOf(userId)
 
   // اگه وسط یه دست فعاله و هنوز نباخته، اول کارت‌هاش رو show کن (مثل فولد)
   if (game.roomPhase === 'playing' && !isEliminated(player)) {
@@ -40,5 +52,10 @@ export function removePlayerFromRoom(game: GameState, userId: number) {
   game.players = game.players.filter((p) => p.userId !== userId)
   game.turnOrder = game.turnOrder.filter((id) => id !== userId)
   delete game.disconnectDeadlines[String(userId)]
+
+  // کسی که قبل از نوبت فعلی بوده حذف شد؛ اندیس باید یکی عقب بیاد
+  if (idx !== -1 && idx < game.currentTurnIndex) game.currentTurnIndex -= 1
+  if (game.currentTurnIndex >= game.turnOrder.length) game.currentTurnIndex = 0
+
   game.log.push(`${player.firstName} از روم خارج شد`)
 }

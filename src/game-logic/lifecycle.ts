@@ -15,13 +15,13 @@ export function dealNewGame(game: GameState) {
   game.currentTurnIndex = 0
   game.phase = 'awaiting_action'
   game.winnerId = null
+  game.foldedThisHand = []
   game.pendingAction = null
   game.revealPending = null
   game.provePending = null
   game.anarchistPending = null
   game.showcase = null
   game.pendingReplacement = null
-  game.foldedThisHand = []
 }
 
 export function resetToWaiting(game: GameState) {
