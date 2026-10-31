@@ -28,6 +28,7 @@ import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, regi
 import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic/matchmakingConfig'
 import { foldHand, isQuietMoment, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 import { continueFlow } from '../game-logic/actions/showcase'
+import { parseSkins } from '../game-logic/skins'
 
 type Env = { DB: D1Database }
 
@@ -99,6 +100,7 @@ export class RoomDO {
       existing.firstName = user.first_name ?? "بازیکن"
       if (!existing.stats) existing.stats = emptyStats()
       clearDisconnect(game, user.id)
+      existing.skins = parseSkins(user.card_skins) // با هر reconnect تازه می‌شه
     } else {
       game.players.push({
         userId: user.id,
@@ -109,6 +111,7 @@ export class RoomDO {
         roles: [],
         revealed: [],
         stats: emptyStats(),
+        skins: parseSkins(user.card_skins),
       })
       game.log.push(`${user.first_name} به روم پیوست`)
     }

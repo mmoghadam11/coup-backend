@@ -10,6 +10,7 @@ export const users = sqliteTable('users', {
   active_room_id: text('active_room_id'),
   role: text('role').notNull().default('player'), // 'player' | 'admin'
   created_at: integer('created_at').notNull().default(0),
+  card_skins: text('card_skins')
 })
 
 export const sessions = sqliteTable('sessions', {

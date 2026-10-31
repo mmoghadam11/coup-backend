@@ -21,6 +21,7 @@ export function buildPublicPayload(game: GameState) {
         revealedRoles: p.roles.filter((_, i) => p.revealed[i]),
         isAlive: !isEliminated(p),
         stats: p.stats,
+        skins: p.skins ?? {},
       })),
       turnOrder: game.turnOrder.map(String),
       currentTurnIndex: game.currentTurnIndex,

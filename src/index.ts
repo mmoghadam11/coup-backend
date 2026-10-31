@@ -7,6 +7,7 @@ import { leaderboardRoutes } from './leaderboard'
 import { matchmakingRoutes } from './matchmaking'
 import { botWebhookRoutes } from './bot/webhook'
 import { runWeeklyReminderJob } from './bot/reminderJob'
+import { skinsRoutes } from './skins'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -41,6 +42,7 @@ app.route('/leaderboard', leaderboardRoutes)
 app.route('/admin', adminRoutes)
 app.route('/rooms', roomsRoutes)
 app.route('/bot/webhook', botWebhookRoutes)
+app.route('/skins', skinsRoutes)
 
 // export default app
 
