@@ -57,6 +57,7 @@ export interface AnarchistAttack {
 
 export type GamePhase =
   | 'waiting_for_players'
+  | 'duel_pick'
   | 'awaiting_action'
   | 'awaiting_response'
   | 'awaiting_block_response'

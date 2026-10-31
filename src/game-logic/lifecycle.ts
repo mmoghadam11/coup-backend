@@ -1,8 +1,10 @@
 import { GameState, shuffle, emptyStats } from './state'
 import { buildFullDeck } from './roles'
-import { MIN_PLAYERS_TO_START, STARTING_COUNTDOWN_SECONDS } from './matchmakingConfig'
+import { DUEL_ENABLED, MIN_PLAYERS_TO_START, STARTING_COUNTDOWN_SECONDS } from './matchmakingConfig'
+import { beginDuelPick } from './duel';
 
 export function dealNewGame(game: GameState) {
+  if (DUEL_ENABLED && game.players.length === 2) { beginDuelPick(game); return }
   const deck = shuffle(buildFullDeck())
   for (const player of game.players) {
     player.roles = [deck.pop()!, deck.pop()!]
@@ -42,6 +44,7 @@ export function resetToWaiting(game: GameState) {
   game.anarchistPending = null
   game.showcase = null
   game.pendingReplacement = null
+  game.duelPicks = {}
 }
 
 export function forceResetGame(game: GameState) {

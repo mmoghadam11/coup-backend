@@ -6,9 +6,17 @@ export const HAND_RESULT_DISPLAY_SECONDS = 8
 export const JOIN_CODE_LENGTH = 6
 export const JOIN_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // بدون حروف/عدد مشابه (O/0, I/1) برای خوانایی بهتر
 
-export const PROOF_SHOWCASE_SECONDS = 3.5
-export const REVEAL_SHOWCASE_SECONDS = 3.5
+// export const PROOF_SHOWCASE_SECONDS = 3.5
+// export const REVEAL_SHOWCASE_SECONDS = 3.5
+export const PROOF_SHOWCASE_SECONDS = 4.5
+export const REVEAL_SHOWCASE_SECONDS = 4.5
 export const REPLACEMENT_SHOWCASE_SECONDS = 4.5
+
+export const DUEL_ENABLED = true
+export const DUEL_PICK_SECONDS = 10
+export const ACTION_SECONDS = 30      // پیشنهاد
+export const RESPONSE_SECONDS = 15    // پیشنهاد
+export const DEADLINE_GRACE_MS = 1000 // تأخیر شبکه؛ سرور یک ثانیه دیرتر عمل می‌کند
 
 export function generateJoinCode(): string {
   let code = ''

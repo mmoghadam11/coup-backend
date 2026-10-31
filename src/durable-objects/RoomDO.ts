@@ -29,6 +29,7 @@ import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic
 import { foldHand, isQuietMoment, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 import { continueFlow } from '../game-logic/actions/showcase'
 import { parseSkins } from '../game-logic/skins'
+import { finishDuelPick, submitDuelPick } from '../game-logic/duel'
 
 type Env = { DB: D1Database }
 
@@ -157,6 +158,12 @@ export class RoomDO {
       case 'start_game':
         await this.startGame(game, userId)
         break
+      case 'duel_pick': {
+        const err = submitDuelPick(game, userId, data.role)
+        if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
+        else if (Object.keys(game.duelPicks).length >= game.players.length) finishDuelPick(game)
+        break
+      }
       case 'action': {
         // const result = this.dispatchAction(game, userId, data.action, data.targetId)
         const result = this.dispatchAction(game, userId, data.action, data.targetId, data.cardIndex)
@@ -440,6 +447,7 @@ export class RoomDO {
     ) {
       payload.private.forcedProofIndex = game.pendingAction.claimedCardIndex
     }
+    if (game.phase === 'duel_pick') payload.private.duelPick = game.duelPicks[String(userId)] ?? null
     ws.send(JSON.stringify(payload))
   }
 

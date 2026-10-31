@@ -42,6 +42,7 @@ export interface InternalPlayer {
   roles: RoleName[]
   revealed: boolean[]
   stats: PlayerStats
+  skins: Record<string, string>
 }
 
 export interface RevealPending {
@@ -126,6 +127,10 @@ export interface GameState {
   // pendingAlarm: { purpose: AlarmPurpose; targetUserId?: number } | null
   countdownEndsAt: number | null   // این خط اضافه شد — timestamp پایان شمارش معکوس، برای نمایش به فرانت هم لازمه
   handResultEndsAt: number | null
+  duelPicks: Record<string, RoleName>   // انتخاب‌های تأییدشده؛ {}
+  deadlineAt: number | null
+  deadlineKey: string | null
+  deadlineTotalMs: number
 }
 
 export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
@@ -156,6 +161,10 @@ export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
     // pendingAlarm: null,
     countdownEndsAt: null,
     handResultEndsAt: null,
+    duelPicks: {},
+    deadlineAt:  null,
+    deadlineKey:  null,
+    deadlineTotalMs: 0,
   }
 }
 
