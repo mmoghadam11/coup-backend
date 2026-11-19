@@ -1,0 +1,1 @@
+ALTER TABLE `telegram_groups` ADD `added_by_telegram_id` integer;

@@ -1,9 +1,9 @@
 import { GameState } from './state'
-import { DISCONNECT_TIMEOUT_SECONDS } from './matchmakingConfig'
+import { DISCONNECT_TIMEOUT_SECONDS, LOBBY_DISCONNECT_SECONDS } from './matchmakingConfig'
 
 export function registerDisconnect(game: GameState, userId: number) {
-  if (game.roomPhase !== 'playing') return // فقط حین بازی مهمه
-  game.disconnectDeadlines[String(userId)] = Date.now() + DISCONNECT_TIMEOUT_SECONDS * 1000
+  const seconds = game.roomPhase === 'playing' ? DISCONNECT_TIMEOUT_SECONDS : LOBBY_DISCONNECT_SECONDS
+  game.disconnectDeadlines[String(userId)] = Date.now() + seconds * 1000
 }
 
 export function clearDisconnect(game: GameState, userId: number) {

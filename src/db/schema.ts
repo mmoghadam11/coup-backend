@@ -55,6 +55,7 @@ export const playerStats = sqliteTable('player_stats', {
 export const telegramGroups = sqliteTable('telegram_groups', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   telegram_chat_id: integer('telegram_chat_id').notNull().unique(),
+  added_by_telegram_id:integer('added_by_telegram_id'),
   group_name: text('group_name'),
   active_room_id: text('active_room_id'),
   last_played_at: integer('last_played_at'),

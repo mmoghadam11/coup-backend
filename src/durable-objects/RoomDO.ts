@@ -25,11 +25,13 @@ import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
 import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAnarchistBlock, startAnarchistAttack } from '../game-logic/actions/anarchist'
 import { recordGameResult } from '../db/matchStats'
 import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, registerDisconnect } from '../game-logic/disconnectManager'
-import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM } from '../game-logic/matchmakingConfig'
+import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START } from '../game-logic/matchmakingConfig'
 import { foldHand, isQuietMoment, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 import { continueFlow } from '../game-logic/actions/showcase'
 import { parseSkins } from '../game-logic/skins'
 import { finishDuelPick, submitDuelPick } from '../game-logic/duel'
+import { handlePhaseTimeout, syncPhaseDeadline } from '../game-logic/phaseTimer'
+import { rulesOf } from '../game-logic/roomRules'
 
 type Env = { DB: D1Database }
 
@@ -43,92 +45,114 @@ export class RoomDO {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url)
+    try {
+      const url = new URL(request.url)
 
-    if (url.pathname === '/admin-close') {
-      return this.handleAdminClose()
-    }
+      if (url.pathname === '/admin-close') {
+        return this.handleAdminClose()
+      }
 
-    if (url.pathname === '/room-info') {
+      if (url.pathname === '/room-info') {
+        const game = await this.getGame()
+        return new Response(
+          JSON.stringify({ playerCount: game.players.length, roomPhase: game.roomPhase }),
+          { headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (request.headers.get('Upgrade') !== 'websocket') {
+        return new Response('Expected websocket', { status: 426 })
+      }
+
+      const token = url.searchParams.get('token')
+      const roomId = url.searchParams.get('roomId')
+      if (!token || !roomId) return new Response('token and roomId required', { status: 401 })
+
+      const db = getDb(this.env.DB)
+      const [session] = await db.select().from(sessions).where(eq(sessions.token, token))
+      if (!session) return new Response('invalid session', { status: 401 })
+
+      const [user] = await db.select().from(users).where(eq(users.id, session.user_id))
+      if (!user) return new Response('user not found', { status: 401 })
+
       const game = await this.getGame()
-      return new Response(
-        JSON.stringify({ playerCount: game.players.length, roomPhase: game.roomPhase }),
-        { headers: { 'Content-Type': 'application/json' } }
-      )
-    }
+      if (game.roomName === null) {
+        const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
+        if (room) {
+          if (room.status === 'closed' && game.players.length === 0) return new Response('room is closed', { status: 410 })
 
-    if (request.headers.get('Upgrade') !== 'websocket') {
-      return new Response('Expected websocket', { status: 426 })
-    }
-
-    const token = url.searchParams.get('token')
-    const roomId = url.searchParams.get('roomId')
-    if (!token || !roomId) return new Response('token and roomId required', { status: 401 })
-
-    const db = getDb(this.env.DB)
-    const [session] = await db.select().from(sessions).where(eq(sessions.token, token))
-    if (!session) return new Response('invalid session', { status: 401 })
-
-    const [user] = await db.select().from(users).where(eq(users.id, session.user_id))
-    if (!user) return new Response('user not found', { status: 401 })
-
-    const game = await this.getGame()
-    if (game.roomName === null) {
-      const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId))
-      if (room) {
-        if (room.status === 'closed' && game.players.length === 0) {
-          return new Response('room is closed', { status: 410 })
-        }
-        game.creatorId = room.created_by
-        game.roomName = room.name
-        game.origin = room.origin as any
-        game.visibility = room.visibility as any
-        // game.roomPhase = room.status as any   // ✅ این خط اضافه شد
-        if (room.origin === 'matchmaking') {
-          game.roomPhase = room.status as any // حالا enum یکیه، این امن‌تره
+          game.creatorId = room.created_by
+          game.roomName = room.name
+          game.origin = room.origin as GameState['origin']
+          game.visibility = room.visibility as GameState['visibility']
+          game.roomPhase = room.status as GameState['roomPhase']
         }
       }
+
+      game.roomId = roomId
+
+      const existing = game.players.find((p) => p.userId === user.id)
+
+      // اگر بازیکن جدید است، شرایط ورود را چک می‌کنیم
+      if (!existing) {
+        if (user.active_room_id !== roomId) return new Response('not a member of this room', { status: 403 })
+        if (game.players.length >= MAX_PLAYERS_PER_ROOM) return new Response('room is full', { status: 409 })
+        if (game.roomPhase === 'playing') return new Response('game in progress', { status: 409 })
+      }
+
+      if (existing) {
+        // بازیکن در حال اتصال مجدد است
+        existing.connected = true
+        existing.photoUrl = user.photo_url ?? null
+        existing.firstName = user.first_name ?? "بازیکن"
+        if (!existing.stats) existing.stats = emptyStats()
+        clearDisconnect(game, user.id)
+        existing.skins = parseSkins(user.card_skins)
+      } else {
+        // اضافه کردن بازیکن جدید به بازی
+        game.players.push({
+          userId: user.id,
+          firstName: user.first_name ?? 'بازیکن',
+          photoUrl: user.photo_url ?? null,
+          connected: true,
+          coins: 0,
+          roles: [],
+          revealed: [],
+          stats: emptyStats(),
+          skins: parseSkins(user.card_skins),
+          ready: game.roomPhase === 'starting'
+        })
+        game.log.push(`${user.first_name} به روم پیوست`)
+      }
+
+      try {
+        evaluateMatchmakingTransition(game)
+      } catch (err) {
+        console.error('❌ Error in evaluateMatchmakingTransition:', err)
+      }
+
+      await this.syncRoomStatusToD1(game)
+      await this.saveGame(game)
+      await this.scheduleNextAlarm(game)
+
+      // ساخت وب‌سوکت
+      const pair = new WebSocketPair()
+      const [client, server] = Object.values(pair)
+
+      this.state.acceptWebSocket(server, [String(user.id)])
+
+      this.sendPrivateTo(server, game, user.id)
+
+      // ارسال وضعیت بازی به پس‌زمینه سپرده می‌شود تا پاسخ 101 فوراً برگردد
+      this.broadcast().catch((err) => console.error('❌ Background broadcast failed:', err))
+
+      return new Response(null, { status: 101, webSocket: client })
+
+    } catch (err: any) {
+      // در صورتی که خطایی رخ دهد، لاگ می‌شود و کرش نمی‌کند
+      console.error('❌❌❌ RoomDO.fetch crashed:', err?.message, err?.stack)
+      return new Response(`Internal Server Error: ${err?.message}`, { status: 500 })
     }
-    game.roomId = roomId
-
-    const existing = game.players.find((p) => p.userId === user.id)
-    if (!existing && game.players.length >= MAX_PLAYERS_PER_ROOM) {
-      return new Response('room is full', { status: 409 })
-    }
-    if (existing) {
-      existing.connected = true
-      existing.photoUrl = user.photo_url ?? null
-      existing.firstName = user.first_name ?? "بازیکن"
-      if (!existing.stats) existing.stats = emptyStats()
-      clearDisconnect(game, user.id)
-      existing.skins = parseSkins(user.card_skins) // با هر reconnect تازه می‌شه
-    } else {
-      game.players.push({
-        userId: user.id,
-        firstName: user.first_name ?? 'بازیکن',
-        photoUrl: user.photo_url ?? null,
-        connected: true,
-        coins: 0,
-        roles: [],
-        revealed: [],
-        stats: emptyStats(),
-        skins: parseSkins(user.card_skins),
-      })
-      game.log.push(`${user.first_name} به روم پیوست`)
-    }
-    const transition = evaluateMatchmakingTransition(game)
-    await this.syncRoomStatusToD1(game)
-    await this.saveGame(game)
-    await this.scheduleNextAlarm(game)
-
-    const pair = new WebSocketPair()
-    const [client, server] = Object.values(pair)
-    this.state.acceptWebSocket(server, [String(user.id)])
-
-    this.sendPrivateTo(server, game, user.id)
-    await this.broadcast()
-
-    return new Response(null, { status: 101, webSocket: client })
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -155,9 +179,9 @@ export class RoomDO {
         game.log.push(`${player?.firstName ?? 'ناشناس'}: ${data.text}`)
         break
       }
-      case 'start_game':
-        await this.startGame(game, userId)
-        break
+      // case 'start_game':
+      //   await this.startGame(game, userId)
+      //   break
       case 'duel_pick': {
         const err = submitDuelPick(game, userId, data.role)
         if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
@@ -218,46 +242,71 @@ export class RoomDO {
         confirmContessaSelection(game, userId, data.roleIndex)
         if (!game.selectionPending && !game.showcase) advanceTurn(game)
         break
-      case 'restart_game':
-        await this.beginRestartVote(game, userId, data.reopenForJoining)
-        break
-      case 'respond_to_restart_vote':
-        await this.handleRestartVoteResponse(game, userId, data.choice)
-        break
-      case 'leave_room':
-        await this.leaveRoom(game, userId)
-        break
+      // case 'restart_game':
+      //   await this.beginRestartVote(game, userId, data.reopenForJoining)
+      //   break
+      // case 'respond_to_restart_vote':
+      //   await this.handleRestartVoteResponse(game, userId, data.choice)
+      //   break
       case 'fold': {
         const result = foldHand(game, userId)
         if (result.error) ws.send(JSON.stringify({ type: 'error', message: result.error }))
         if (result.handEnded) await this.onHandEnded(game)
         break
       }
-      case 'mm_leave': {
-        if (game.origin !== 'matchmaking') break
+      // case 'leave_room':
+      //   await this.leaveRoom(game, userId)
+      //   break
+      // case 'mm_leave': {
+      //   if (game.origin !== 'matchmaking') break
 
-        // وسط دست فعال؛ شامل game_over نمی‌شه
+      //   // وسط دست فعال؛ شامل game_over نمی‌شه
+      //   const midHand = game.roomPhase === 'playing' && game.phase !== 'game_over'
+      //   if (midHand) {
+      //     const err = await this.leaveAtQuietMoment(game, userId)
+      //     if (err) { ws.send(JSON.stringify({ type: 'error', message: err })); break }
+      //   } else {
+      //     // waiting / starting / پنجره‌ی نتیجه‌ی دست
+      //     removePlayerFromRoom(game, userId)
+      //     if (game.roomId) {
+      //       const db = getDb(this.env.DB)
+      //       await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+      //       await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+      //     }
+      //   }
+
+      //   evaluateMatchmakingTransition(game)
+      //   await this.syncRoomStatusToD1(game)
+      //   break
+      // }
+      // case 'leave_table': {
+      //   const err = await this.leaveAtQuietMoment(game, userId)
+      //   if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
+      //   break
+      // }
+      case 'set_ready': {
+        const p = game.players.find((x) => x.userId === userId)
+        const editable = game.phase === 'waiting_for_players' && (game.roomPhase === 'waiting' || game.roomPhase === 'starting')
+        if (p && editable && rulesOf(game).startRule === 'ready_quorum') {
+          p.ready = !!data.ready
+          evaluateMatchmakingTransition(game)
+          await this.syncRoomStatusToD1(game)
+        }
+        break
+      }
+      case 'mm_leave':
+      case 'leave_table':
+      case 'leave_room': {
         const midHand = game.roomPhase === 'playing' && game.phase !== 'game_over'
         if (midHand) {
           const err = await this.leaveAtQuietMoment(game, userId)
           if (err) { ws.send(JSON.stringify({ type: 'error', message: err })); break }
         } else {
-          // waiting / starting / پنجره‌ی نتیجه‌ی دست
-          removePlayerFromRoom(game, userId)
-          if (game.roomId) {
-            const db = getDb(this.env.DB)
-            await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
-            await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
-          }
+          await this.dropPlayer(game, userId)
         }
-
         evaluateMatchmakingTransition(game)
         await this.syncRoomStatusToD1(game)
-        break
-      }
-      case 'leave_table': {
-        const err = await this.leaveAtQuietMoment(game, userId)
-        if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
+        if (await this.closeIfEmpty(game)) shouldWipeAfterBroadcast = true
         break
       }
       case 'force_reset':
@@ -273,6 +322,7 @@ export class RoomDO {
         return
     }
 
+    syncPhaseDeadline(game)
     await this.saveGame(game)
     await this.scheduleNextAlarm(game)   // ✅ این خط
     await this.broadcast()
@@ -290,7 +340,7 @@ export class RoomDO {
     //   }
     // }
     if (shouldWipeAfterBroadcast) {
-      await this.state.storage.deleteAll()
+      await this.wipeIfClosed()
     }
   }
 
@@ -320,7 +370,9 @@ export class RoomDO {
       return
     }
     player.connected = false
-    registerDisconnect(game, userId) // این خط اضافه شد
+    registerDisconnect(game, userId)
+    evaluateMatchmakingTransition(game) // آفلاین‌ها در حد نصاب حساب نمی‌شوند
+    await this.syncRoomStatusToD1(game)
 
     await this.saveGame(game)
     await this.scheduleNextAlarm(game)
@@ -499,9 +551,9 @@ export class RoomDO {
   private async leaveAtQuietMoment(game: GameState, userId: number): Promise<string | null> {
     const beforeStart = game.phase === 'waiting_for_players'
     if (!beforeStart && !isQuietMoment(game)) return 'خروج فقط بین اکشن‌ها ممکنه'
-    if (game.origin !== 'matchmaking' && userId === game.creatorId) {
-      return 'سازنده نمی‌تونه خارج بشه؛ باید روم رو ببنده'
-    }
+    // if (game.origin !== 'matchmaking' && userId === game.creatorId) {
+    //   return 'سازنده نمی‌تونه خارج بشه؛ باید روم رو ببنده'
+    // }
     // const player = game.players.find((p) => p.userId === userId)
     // if (!player) return null
     if (!game.players.some((p) => p.userId === userId)) return null
@@ -533,19 +585,21 @@ export class RoomDO {
       if (result.gameJustEnded) await this.onHandEnded(game)
     }
 
+    if (game.deadlineAt && !game.showcase && Date.now() >= game.deadlineAt) {
+      if (handlePhaseTimeout(game).gameJustEnded) await this.onHandEnded(game)
+    }
+
     if (game.roomPhase === 'starting' && game.countdownEndsAt && Date.now() >= game.countdownEndsAt) {
-      startMatchmakingHand(game)
+      if (rulesOf(game).startRule === 'ready_quorum') await this.purgeNotReady(game)
+      if (game.players.length >= MIN_PLAYERS_TO_START) startMatchmakingHand(game)
+      else { game.roomPhase = 'waiting'; game.countdownEndsAt = null }
       await this.syncRoomStatusToD1(game)
     }
 
     if (game.handResultEndsAt && Date.now() >= game.handResultEndsAt) {
       finishMatchmakingHand(game)
+      evaluateMatchmakingTransition(game)      // بدون شرط origin
       await this.syncRoomStatusToD1(game)
-      // این بخش جدید اضافه شد: بعد از برگشتن به waiting، فوراً چک کن شاید همین الان کافیه برای starting
-      if (game.origin === 'matchmaking') {
-        evaluateMatchmakingTransition(game)
-        await this.syncRoomStatusToD1(game)
-      }
     }
 
     const expired = getExpiredDisconnects(game)
@@ -556,18 +610,30 @@ export class RoomDO {
         await this.onHandEnded(game)
       }
     }
-    if (expired.length > 0 && game.origin === 'matchmaking') {
+    if (expired.length > 0) {
       evaluateMatchmakingTransition(game)
       await this.syncRoomStatusToD1(game)
     }
 
+    syncPhaseDeadline(game)
+    // await this.saveGame(game)
+    // await this.scheduleNextAlarm(game)
+    // await this.broadcast()
+    // جایگزین سه خط آخر (saveGame / scheduleNextAlarm / broadcast)
+    const closed = await this.closeIfEmpty(game)
     await this.saveGame(game)
+    if (closed) {
+      await this.broadcast()
+      await this.wipeIfClosed()
+      return
+    }
     await this.scheduleNextAlarm(game)
     await this.broadcast()
   }
 
   private async scheduleNextAlarm(game: GameState) {
     const candidates: number[] = []
+    if (game.deadlineAt) candidates.push(game.deadlineAt)
     if (game.roomPhase === 'starting' && game.countdownEndsAt) candidates.push(game.countdownEndsAt)
     if (game.handResultEndsAt) candidates.push(game.handResultEndsAt)
     const nextDisconnect = getNextDisconnectDeadline(game)
@@ -581,27 +647,25 @@ export class RoomDO {
     }
   }
 
+  private async wipeIfClosed() {
+    const g = await this.state.storage.get<GameState>('game')
+    // اگر وضعیت از room_closed تغییر کرده باشد، یعنی کاربری دوباره روم را باز کرده؛ پس دست نزن
+    if (g && g.phase !== 'room_closed') return
+
+    await this.state.storage.deleteAlarm()     // deleteAll آلارم را پاک نمی‌کند، پس جداگانه پاکش می‌کنیم
+    await this.state.storage.deleteAll()
+  }
+
   private async syncRoomStatusToD1(game: GameState) {
-    if (!game.roomId || game.origin !== 'matchmaking') return
-    const db = getDb(this.env.DB)
-    await db.update(rooms).set({ status: game.roomPhase }).where(eq(rooms.id, game.roomId))
+    if (!game.roomId) return
+    await getDb(this.env.DB).update(rooms).set({ status: game.roomPhase }).where(eq(rooms.id, game.roomId))
   }
 
   private async onHandEnded(game: GameState) {
     if (!game.roomId) return
-
     await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
-
-    if (game.origin === 'matchmaking') {
-      game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
-      await this.syncRoomStatusToD1(game) // الان هنوز roomPhase='playing'، status رو همونجوری نگه می‌داریم تا alarm برگردوندش به waiting
-    }
-    // else {
-    //   if (game.roomId) {
-    //     const db = getDb(this.env.DB)
-    //     await db.update(rooms).set({ status: 'finished' }).where(eq(rooms.id, game.roomId))
-    //   }
-    // }
+    game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
+    await this.syncRoomStatusToD1(game)
   }
 
 
@@ -682,5 +746,31 @@ export class RoomDO {
       wrongChallenges: p.stats.wrongChallenges,
       successfulSteals: p.stats.successfulSteals,
     }))
+  }
+
+  private async dropPlayer(game: GameState, userId: number) {
+    removePlayerFromRoom(game, userId)
+    if (game.roomId) {
+      const db = getDb(this.env.DB)
+      await db.delete(roomPlayers).where(and(eq(roomPlayers.room_id, game.roomId), eq(roomPlayers.user_id, userId)))
+      await db.update(users).set({ active_room_id: null }).where(eq(users.id, userId))
+    }
+  }
+
+  // ناآماده یا آفلاین بودن در لحظه‌ی شروع = خروج از میز
+  private async purgeNotReady(game: GameState) {
+    const out = game.players.filter((p) => !p.ready || !p.connected)
+    for (const p of out) await this.dropPlayer(game, p.userId)
+    if (out.length) game.log.push(`${out.length} بازیکن که آماده نبودند از میز خارج شدند`)
+  }
+
+  // وقتی همه رفتند، روم لابی و گروه بسته می‌شود؛ matchmaking دست‌نخورده می‌ماند
+  private async closeIfEmpty(game: GameState): Promise<boolean> {
+    if (!rulesOf(game).autoCloseWhenEmpty || game.players.length > 0 || game.phase === 'room_closed') return false
+    if (game.roomId) await markRoomFinishedAndClearPlayers(this.env.DB, game.roomId)
+    game.phase = 'room_closed'
+    game.roomPhase = 'closed'
+    game.log.push('همه‌ی بازیکنان خارج شدند؛ روم بسته شد')
+    return true
   }
 }

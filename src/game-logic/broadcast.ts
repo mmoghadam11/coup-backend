@@ -1,3 +1,4 @@
+import { DEADLINE_GRACE_MS } from './matchmakingConfig'
 import { GameState, isEliminated } from './state'
 
 export function buildPublicPayload(game: GameState) {
@@ -8,9 +9,14 @@ export function buildPublicPayload(game: GameState) {
       roomName: game.roomName,
       origin: game.origin,                           // این خط اضافه شد
       roomPhase: game.roomPhase,                      // این خط اضافه شد
-      countdownEndsAt: game.countdownEndsAt,          // این خط اضافه شد
-      handResultEndsAt: game.handResultEndsAt,
+      
+      // countdownEndsAt: game.countdownEndsAt,          // این خط اضافه شد
+      // handResultEndsAt: game.handResultEndsAt,
+      countdownInMs: game.countdownEndsAt ? Math.max(0, game.countdownEndsAt - Date.now()) : null,
+      handResultInMs: game.handResultEndsAt ? Math.max(0, game.handResultEndsAt - Date.now()) : null,
+      
       creatorId: game.creatorId ? String(game.creatorId) : null,
+      duel: game.phase === 'duel_pick' ? { confirmed: Object.keys(game.duelPicks) } : null,
       players: game.players.map((p) => ({
         id: String(p.userId),
         name: p.firstName,
@@ -22,6 +28,7 @@ export function buildPublicPayload(game: GameState) {
         isAlive: !isEliminated(p),
         stats: p.stats,
         skins: p.skins ?? {},
+        ready: p.ready ?? false,
       })),
       turnOrder: game.turnOrder.map(String),
       currentTurnIndex: game.currentTurnIndex,
@@ -79,6 +86,8 @@ export function buildPublicPayload(game: GameState) {
           shuffle: game.showcase.shuffle ?? false,
         }
         : null,
+      deadlineInMs: game.deadlineAt ? Math.max(0, game.deadlineAt - Date.now() - DEADLINE_GRACE_MS) : null,
+      deadlineTotalMs: game.deadlineAt ? game.deadlineTotalMs : null,
     },
   }
 }

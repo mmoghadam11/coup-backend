@@ -1,12 +1,13 @@
 import { Hono } from 'hono'
 import { eq, sql, desc, asc, ne, and } from 'drizzle-orm'
 import { getDb } from './db'
-import { users, rooms, sessions, roomPlayers } from './db/schema'
+import { users, rooms, sessions, roomPlayers, telegramGroups } from './db/schema'
 import { requireAdmin } from './adminMiddleware'
 import { markRoomFinishedAndClearPlayers } from './db/roomCleanup'
 import { runWeeklyReminderJob, sendTestReminder } from './bot/reminderJob'
+import { tgCall } from './bot/telegramApi'
 
-type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace; TELEGRAM_BOT_TOKEN: string }
+type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace; TELEGRAM_BOT_TOKEN: string ,WEBHOOK_SECRET?: string}
 type Variables = { userId: number }
 
 export const adminRoutes = new Hono<{ Bindings: Bindings; Variables: Variables }>()
@@ -146,8 +147,23 @@ adminRoutes.patch('/rooms/:id', async (c) => {
 adminRoutes.delete('/rooms/:id', async (c) => {
   const db = getDb(c.env.DB)
   const id = c.req.param('id')
+
+  // ۱. بستن Durable Object مربوط به روم در حافظه
   await closeRoomDO(c.env, id)
+
+  // ۲. پاک کردن بازیکنان این روم از جدول واسط
+  await db.delete(roomPlayers).where(eq(roomPlayers.room_id, id))
+
+  // ۳. آزاد کردن کاربرانی که در این روم بودند (تا در روم گیر نکنند)
+  await db.update(users).set({ active_room_id: null }).where(eq(users.active_room_id, id))
+
+  // ۴. آزاد کردن گروه‌هایی که به این روم متصل بودند
+  // (اگر جدول telegramGroups در فایل شما ایمپورت شده باشد)
+  await db.update(telegramGroups).set({ active_room_id: null }).where(eq(telegramGroups.active_room_id, id))
+
+  // ۵. حالا با خیال راحت روم را حذف می‌کنیم
   await db.delete(rooms).where(eq(rooms.id, id))
+
   return c.json({ ok: true })
 })
 
@@ -155,4 +171,39 @@ adminRoutes.post('/test-reminder/:userId', async (c) => {
   const userId = Number(c.req.param('userId'))
   const sent = await sendTestReminder(c.env.DB, c.env.TELEGRAM_BOT_TOKEN, userId)
   return c.json({ sent })
+})
+
+const BOT_COMMANDS = [
+  { command: 'start', description: 'شروع و ورود به بازی' },
+  { command: 'play', description: 'ورود به بازی' },
+  { command: 'stats', description: 'آمار من / برترین‌های گروه' },
+  { command: 'close', description: 'بستن میز بازی گروه (ادمین)' },
+]
+
+async function botReport(env: Bindings, origin: string) {
+  const token = env.TELEGRAM_BOT_TOKEN
+  const [me, hook] = await Promise.all([tgCall<any>(token, 'getMe'), tgCall<any>(token, 'getWebhookInfo')])
+  const expected = `${origin}/bot/webhook`
+  return {
+    bot: me.result?.username ?? null,
+    expectedUrl: expected,
+    urlMatches: hook.result?.url === expected,
+    pendingUpdates: hook.result?.pending_update_count,
+    lastError: hook.result?.last_error_message ?? null, // اگر ربات جواب نمی‌دهد، اینجا دلیل را می‌نویسد
+  }
+}
+
+adminRoutes.get('/bot/status', async (c) => c.json(await botReport(c.env, new URL(c.req.url).origin)))
+
+adminRoutes.post('/bot/setup', async (c) => {
+  const origin = new URL(c.req.url).origin
+  const token = c.env.TELEGRAM_BOT_TOKEN
+  const webhook = await tgCall(token, 'setWebhook', {
+    url: `${origin}/bot/webhook`,
+    allowed_updates: ['message', 'my_chat_member'],
+    drop_pending_updates: true,   // update‌های انباشته‌ی قدیمی دور ریخته می‌شوند
+    ...(c.env.WEBHOOK_SECRET ? { secret_token: c.env.WEBHOOK_SECRET } : {}),
+  })
+  const commands = await tgCall(token, 'setMyCommands', { commands: BOT_COMMANDS })
+  return c.json({ webhook: webhook.ok, commands: commands.ok, ...(await botReport(c.env, origin)) })
 })

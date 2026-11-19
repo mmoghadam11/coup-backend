@@ -3,7 +3,9 @@
 	"name": "coup-backend",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-02",
-	"compatibility_flags": ["nodejs_compat"],
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -32,6 +34,10 @@
 	//این یعنی هر روز ساعت ۱۲:۰۰ UTC اجرا بشه
 	"triggers": {
 		"crons": ["0 12 * * *"]
+	},
+	"vars": {
+		"FRONTEND_URL": "https://telegram-coup-frontend.pages.dev",
+		"MINI_APP_SHORT_NAME": "LetsPlay"
 	}
 	// "compatibility_flags": [
 	//   "nodejs_compat"

@@ -2,6 +2,7 @@ import { GameState, shuffle, emptyStats } from './state'
 import { buildFullDeck } from './roles'
 import { DUEL_ENABLED, MIN_PLAYERS_TO_START, STARTING_COUNTDOWN_SECONDS } from './matchmakingConfig'
 import { beginDuelPick } from './duel';
+import { readyQuorum, rulesOf } from './roomRules';
 
 export function dealNewGame(game: GameState) {
   if (DUEL_ENABLED && game.players.length === 2) { beginDuelPick(game); return }
@@ -52,33 +53,31 @@ export function forceResetGame(game: GameState) {
   game.log.push('⚠️ بازی توسط سازنده ریست شد')
 }
 
-// فقط برای روم‌های matchmaking: بعد از اضافه/کم شدن بازیکن، چک کن باید وارد starting بشیم یا ازش خارج بشیم
+// تصمیم می‌گیرد شمارش شروع شود یا لغو شود
 export function evaluateMatchmakingTransition(game: GameState): { needsAlarmUpdate: boolean } {
-  if (game.origin !== 'matchmaking') return { needsAlarmUpdate: false }
+  if (game.roomPhase === 'closed' || game.phase === 'room_closed') return { needsAlarmUpdate: false }
 
-  const playerCount = game.players.filter((p) => p.connected || game.roomPhase === 'playing').length
+  const rules = rulesOf(game)
+  const present = game.players.filter((p) => p.connected)
+  const ready = present.filter((p) => p.ready)
+  const headcount = rules.startRule === 'headcount'
 
-  if (game.roomPhase === 'waiting') {
-    if (playerCount >= MIN_PLAYERS_TO_START) {
-      game.roomPhase = 'starting'
-      game.countdownEndsAt = Date.now() + STARTING_COUNTDOWN_SECONDS * 1000
-      game.log.push(`شمارش معکوس شروع شد (${STARTING_COUNTDOWN_SECONDS} ثانیه)`)
-      return { needsAlarmUpdate: true }
-    }
-    return { needsAlarmUpdate: false }
+  const canStart = headcount ? present.length >= MIN_PLAYERS_TO_START : ready.length >= readyQuorum(present.length)
+  // بعد از شروع شمارش، ورود یک نفر جدید نباید آن را بپراند؛ فقط افتادن زیر حداقل لغوش می‌کند
+  const keepStarting = headcount ? present.length >= MIN_PLAYERS_TO_START : ready.length >= MIN_PLAYERS_TO_START
+
+  if (game.roomPhase === 'waiting' && canStart) {
+    game.roomPhase = 'starting'
+    game.countdownEndsAt = Date.now() + rules.countdownSeconds * 1000
+    game.log.push(`شمارش معکوس شروع شد (${rules.countdownSeconds} ثانیه)`)
+    return { needsAlarmUpdate: true }
   }
-
-  if (game.roomPhase === 'starting') {
-    if (playerCount < MIN_PLAYERS_TO_START) {
-      game.roomPhase = 'waiting'
-      game.countdownEndsAt = null
-      game.log.push('تعداد بازیکنان کافی نیست؛ شمارش معکوس لغو شد')
-      return { needsAlarmUpdate: true }
-    }
-    // اگه پر هنوز starting هست و countdown از قبل درحال اجراست، کاری نکن (alarm خودش سروقتش فایر می‌شه)
-    return { needsAlarmUpdate: false }
+  if (game.roomPhase === 'starting' && !keepStarting) {
+    game.roomPhase = 'waiting'
+    game.countdownEndsAt = null
+    game.log.push('تعداد آماده‌ها کافی نیست؛ شمارش معکوس لغو شد')
+    return { needsAlarmUpdate: true }
   }
-
   return { needsAlarmUpdate: false }
 }
 
@@ -94,7 +93,8 @@ export function startMatchmakingHand(game: GameState) {
 // وقتی یه دست matchmaking تموم شد، برگرد به waiting (نه closed) تا دست بعدی بتونه شروع بشه
 export function finishMatchmakingHand(game: GameState) {
   game.roomPhase = 'waiting'
-  game.handResultEndsAt = null   // ✅ این خط
+  game.handResultEndsAt = null
   resetToWaiting(game)
+  for (const p of game.players) p.ready = p.connected // کسی که مانده، برای دست بعد آماده است
   game.log.push('این دست تموم شد؛ منتظر بازیکنان برای دست بعدی')
 }
