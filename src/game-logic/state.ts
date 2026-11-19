@@ -43,6 +43,7 @@ export interface InternalPlayer {
   revealed: boolean[]
   stats: PlayerStats
   skins: Record<string, string>
+  ready: boolean
 }
 
 export interface RevealPending {
@@ -139,7 +140,8 @@ export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
     roomName: null,
     origin,
     visibility: null,
-    roomPhase: origin === 'matchmaking' ? 'waiting' : 'playing',
+    // roomPhase: origin === 'matchmaking' ? 'waiting' : 'playing',
+    roomPhase: 'waiting',
     phase: 'waiting_for_players',
     creatorId: null,
     players: [],
