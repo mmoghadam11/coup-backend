@@ -25,13 +25,15 @@ import { markRoomFinishedAndClearPlayers } from '../db/roomCleanup'
 import { neutralizeAnarchist, passAnarchistCard, respondToAnarchist, respondToAnarchistBlock, startAnarchistAttack } from '../game-logic/actions/anarchist'
 import { recordGameResult } from '../db/matchStats'
 import { clearDisconnect, getExpiredDisconnects, getNextDisconnectDeadline, registerDisconnect } from '../game-logic/disconnectManager'
-import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START } from '../game-logic/matchmakingConfig'
+import { HAND_RESULT_DISPLAY_SECONDS, MAX_PLAYERS_PER_ROOM, MIN_PLAYERS_TO_START, RECORD_STATS_WITH_BOTS } from '../game-logic/matchmakingConfig'
 import { foldHand, isQuietMoment, removePlayerFromRoom } from '../game-logic/actions/foldLeave'
 import { continueFlow } from '../game-logic/actions/showcase'
 import { parseSkins } from '../game-logic/skins'
 import { finishDuelPick, submitDuelPick } from '../game-logic/duel'
 import { handlePhaseTimeout, syncPhaseDeadline } from '../game-logic/phaseTimer'
 import { rulesOf } from '../game-logic/roomRules'
+import { botsOf, maybeAddBot, reconcileBots, thinkDelay } from '../game-logic/bots/botRoster'
+import { planBotMove } from '../game-logic/bots/botBrain'
 
 type Env = { DB: D1Database }
 
@@ -182,66 +184,77 @@ export class RoomDO {
       // case 'start_game':
       //   await this.startGame(game, userId)
       //   break
-      case 'duel_pick': {
-        const err = submitDuelPick(game, userId, data.role)
+      // *********************************************************************************
+      // case 'duel_pick': {
+      //   const err = submitDuelPick(game, userId, data.role)
+      //   if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
+      //   else if (Object.keys(game.duelPicks).length >= game.players.length) finishDuelPick(game)
+      //   break
+      // }
+      // case 'action': {
+      //   // const result = this.dispatchAction(game, userId, data.action, data.targetId)
+      //   const result = this.dispatchAction(game, userId, data.action, data.targetId, data.cardIndex)
+      //   if (result?.error) {
+      //     ws.send(JSON.stringify({ type: 'error', message: result.error }))
+      //   }
+      //   break
+      // }
+      // case 'respond':
+      //   respondToAction(game, userId, data.response)
+      //   break
+      // case 'block':
+      //   blockAction(game, userId, data.claimedRole)
+      //   break
+      // case 'respond_to_block':
+      //   respondToBlock(game, userId, data.response)
+      //   break
+      // case 'anarchist_respond':
+      //   respondToAnarchist(game, userId, data.response)
+      //   break
+      // case 'anarchist_block_respond':
+      //   respondToAnarchistBlock(game, userId, data.response)
+      //   break
+      // case 'anarchist_pass': {
+      //   const result = passAnarchistCard(game, userId, Number(data.targetId))
+      //   if (result.error) {
+      //     ws.send(JSON.stringify({ type: 'error', message: result.error }))
+      //   }
+      //   break
+      // }
+      // case 'anarchist_neutralize': { // این case جدید اضافه شد
+      //   const result = neutralizeAnarchist(game, userId)
+      //   if (result.error) {
+      //     ws.send(JSON.stringify({ type: 'error', message: result.error }))
+      //   } else {
+      //     advanceTurn(game) // چون حمله کامل تموم شد، نوبت باید بره جلو
+      //   }
+      //   break
+      // }
+      // case 'prove_card':
+      //   provideProof(game, userId, data.roleIndex)
+      //   break
+      // case 'reveal_card':
+      //   revealCard(game, userId, data.roleIndex)
+      //   break
+      // case 'exchange_select':
+      //   confirmExchangeSelection(game, userId, data.keepIndexes)
+      //   if (!game.selectionPending) advanceTurn(game)
+      //   break
+      // case 'contessa_self_select':
+      // case 'contessa_other_select':
+      //   confirmContessaSelection(game, userId, data.roleIndex)
+      //   if (!game.selectionPending && !game.showcase) advanceTurn(game)
+      //   break
+      // ************************************************************************************************
+      case 'duel_pick': case 'action': case 'respond': case 'block': case 'respond_to_block':
+      case 'anarchist_respond': case 'anarchist_block_respond': case 'anarchist_pass': case 'anarchist_neutralize':
+      case 'prove_card': case 'reveal_card': case 'exchange_select':
+      case 'contessa_self_select': case 'contessa_other_select': {
+        const err = this.applyGameCommand(game, userId, data)
         if (err) ws.send(JSON.stringify({ type: 'error', message: err }))
-        else if (Object.keys(game.duelPicks).length >= game.players.length) finishDuelPick(game)
         break
       }
-      case 'action': {
-        // const result = this.dispatchAction(game, userId, data.action, data.targetId)
-        const result = this.dispatchAction(game, userId, data.action, data.targetId, data.cardIndex)
-        if (result?.error) {
-          ws.send(JSON.stringify({ type: 'error', message: result.error }))
-        }
-        break
-      }
-      case 'respond':
-        respondToAction(game, userId, data.response)
-        break
-      case 'block':
-        blockAction(game, userId, data.claimedRole)
-        break
-      case 'respond_to_block':
-        respondToBlock(game, userId, data.response)
-        break
-      case 'anarchist_respond':
-        respondToAnarchist(game, userId, data.response)
-        break
-      case 'anarchist_block_respond':
-        respondToAnarchistBlock(game, userId, data.response)
-        break
-      case 'anarchist_pass': {
-        const result = passAnarchistCard(game, userId, Number(data.targetId))
-        if (result.error) {
-          ws.send(JSON.stringify({ type: 'error', message: result.error }))
-        }
-        break
-      }
-      case 'anarchist_neutralize': { // این case جدید اضافه شد
-        const result = neutralizeAnarchist(game, userId)
-        if (result.error) {
-          ws.send(JSON.stringify({ type: 'error', message: result.error }))
-        } else {
-          advanceTurn(game) // چون حمله کامل تموم شد، نوبت باید بره جلو
-        }
-        break
-      }
-      case 'prove_card':
-        provideProof(game, userId, data.roleIndex)
-        break
-      case 'reveal_card':
-        revealCard(game, userId, data.roleIndex)
-        break
-      case 'exchange_select':
-        confirmExchangeSelection(game, userId, data.keepIndexes)
-        if (!game.selectionPending) advanceTurn(game)
-        break
-      case 'contessa_self_select':
-      case 'contessa_other_select':
-        confirmContessaSelection(game, userId, data.roleIndex)
-        if (!game.selectionPending && !game.showcase) advanceTurn(game)
-        break
+      // ************************************************************************************************
       // case 'restart_game':
       //   await this.beginRestartVote(game, userId, data.reopenForJoining)
       //   break
@@ -475,6 +488,12 @@ export class RoomDO {
   }
 
   private async saveGame(game: GameState) {
+    reconcileBots(game)
+    const now = Date.now()
+    for (const b of botsOf(game)) {
+      if (planBotMove(game, b.userId)) { if (!b.botAt) b.botAt = now + thinkDelay(b) }
+      else b.botAt = null
+    }
     await this.state.storage.put('game', game)
   }
 
@@ -585,6 +604,14 @@ export class RoomDO {
       if (result.gameJustEnded) await this.onHandEnded(game)
     }
 
+    if (game.botJoinAt && Date.now() >= game.botJoinAt) {
+      game.botJoinAt = null
+      if (maybeAddBot(game)) {
+        evaluateMatchmakingTransition(game)   // با ربات، تعداد کافی است و شمارش شروع می‌شود
+        await this.syncRoomStatusToD1(game)
+      }
+    }
+
     if (game.deadlineAt && !game.showcase && Date.now() >= game.deadlineAt) {
       if (handlePhaseTimeout(game).gameJustEnded) await this.onHandEnded(game)
     }
@@ -615,6 +642,7 @@ export class RoomDO {
       await this.syncRoomStatusToD1(game)
     }
 
+    this.runBots(game)
     syncPhaseDeadline(game)
     // await this.saveGame(game)
     // await this.scheduleNextAlarm(game)
@@ -639,6 +667,8 @@ export class RoomDO {
     const nextDisconnect = getNextDisconnectDeadline(game)
     if (nextDisconnect) candidates.push(nextDisconnect)
     if (game.showcase) candidates.push(game.showcase.endsAt)
+    if (game.botJoinAt) candidates.push(game.botJoinAt)
+    for (const b of botsOf(game)) if (b.botAt) candidates.push(b.botAt)
 
     if (candidates.length === 0) {
       await this.state.storage.deleteAlarm()
@@ -662,6 +692,10 @@ export class RoomDO {
   }
 
   private async onHandEnded(game: GameState) {
+    if (!RECORD_STATS_WITH_BOTS && game.players.some((p) => p.isBot)) {
+      game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
+      return await this.syncRoomStatusToD1(game)
+    }
     if (!game.roomId) return
     await recordGameResult(this.env.DB, game.roomId, this.buildGameResults(game))
     game.handResultEndsAt = Date.now() + HAND_RESULT_DISPLAY_SECONDS * 1000
@@ -735,7 +769,8 @@ export class RoomDO {
   }
 
   private buildGameResults(game: GameState) {
-    return game.players.map((p) => ({
+    // return game.players.map((p) => ({
+    return game.players.filter((p) => !p.isBot).map((p) => ({
       userId: p.userId,
       isWinner: p.userId === game.winnerId,
       kills: p.stats.kills,
@@ -772,5 +807,60 @@ export class RoomDO {
     game.roomPhase = 'closed'
     game.log.push('همه‌ی بازیکنان خارج شدند؛ روم بسته شد')
     return true
+  }
+
+  private applyGameCommand(game: GameState, userId: number, data: any): string | null {
+    switch (data.type) {
+      case 'duel_pick': {
+        const err = submitDuelPick(game, userId, data.role)
+        if (err) return err
+        if (Object.keys(game.duelPicks).length >= game.players.length) finishDuelPick(game)
+        return null
+      }
+      case 'action': {
+        const r = this.dispatchAction(game, userId, data.action, data.targetId, data.cardIndex)
+        return r?.error ?? null
+      }
+      case 'respond': respondToAction(game, userId, data.response); return null
+      case 'block': blockAction(game, userId, data.claimedRole); return null
+      case 'respond_to_block': respondToBlock(game, userId, data.response); return null
+      case 'anarchist_respond': respondToAnarchist(game, userId, data.response); return null
+      case 'anarchist_block_respond': respondToAnarchistBlock(game, userId, data.response); return null
+      case 'anarchist_pass': return passAnarchistCard(game, userId, Number(data.targetId)).error ?? null
+      case 'anarchist_neutralize': {
+        const r = neutralizeAnarchist(game, userId)
+        if (r.error) return r.error
+        advanceTurn(game)
+        return null
+      }
+      case 'prove_card': provideProof(game, userId, data.roleIndex); return null
+      case 'reveal_card': revealCard(game, userId, data.roleIndex); return null
+      case 'exchange_select':
+        confirmExchangeSelection(game, userId, data.keepIndexes)
+        if (!game.selectionPending) advanceTurn(game)
+        return null
+      case 'contessa_self_select':
+      case 'contessa_other_select':
+        confirmContessaSelection(game, userId, data.roleIndex)
+        if (!game.selectionPending && !game.showcase) advanceTurn(game)
+        return null
+    }
+    return null
+  }
+  // ربات‌هایی که زمان فکرشان تمام شده؛ تصمیم دوباره گرفته می‌شود چون وضعیت ممکن است عوض شده باشد
+  private runBots(game: GameState) {
+    const now = Date.now()
+    for (const b of botsOf(game)) {
+      if (!b.botAt || b.botAt > now) continue
+      b.botAt = null
+      const move = planBotMove(game, b.userId)
+      if (!move) continue
+      if (!this.applyGameCommand(game, b.userId, move)) { b.botErrors = 0; continue }
+
+      // حرکت اصلی خطا داد: حرکت امن، و اگر آن هم خطا داد ۱۵ ثانیه صبر (تا alarm در حلقه نیفتد)
+      b.botErrors = (b.botErrors ?? 0) + 1
+      const safe = planBotMove(game, b.userId, { safe: true })
+      if (!safe || this.applyGameCommand(game, b.userId, safe)) b.botAt = now + 15000
+    }
   }
 }
