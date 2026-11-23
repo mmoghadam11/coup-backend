@@ -3,6 +3,7 @@ import { GameState, isEliminated } from '../state'
 import { startShowcase } from './showcaseCore'
 
 import { PROOF_SHOWCASE_SECONDS } from '../matchmakingConfig'
+import { noteProof } from '../bots/botMemory'
 
 export function provideProof(game: GameState, userId: number, roleIndex: number): { ok: boolean } {
   const prove = game.provePending
@@ -21,6 +22,7 @@ export function provideProof(game: GameState, userId: number, roleIndex: number)
   const shownRole = claimer.roles[idx]
 
   const success = shownRole === prove.claimedRole
+  noteProof(game, userId, prove.challengerId, success)
   const challenger = game.players.find((p) => p.userId === prove.challengerId)
 
   if (success) {

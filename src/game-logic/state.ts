@@ -32,6 +32,7 @@ export function emptyStats(): PlayerStats {
     coups: 0,
   }
 }
+export interface OppMemory { checked: number; lies: number; chal: number; chalWrong: number }
 
 export interface InternalPlayer {
   userId: number
@@ -44,6 +45,14 @@ export interface InternalPlayer {
   stats: PlayerStats
   skins: Record<string, string>
   ready: boolean
+
+  isBot?: boolean
+  botProfile?: 'careful' | 'bluffer' | 'pro'
+  botAt?: number | null      // لحظه‌ای که ربات تصمیمش را اجرا می‌کند
+  botErrors?: number
+  hist?: { games: number; bluffPG: number }
+  botKey?: string | null
+  leftRoom?: boolean
 }
 
 export interface RevealPending {
@@ -132,6 +141,9 @@ export interface GameState {
   deadlineAt: number | null
   deadlineKey: string | null
   deadlineTotalMs: number
+
+  botJoinAt: number | null   // initialGameState: null
+  oppMemory: Record<string, OppMemory>
 }
 
 export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
@@ -164,9 +176,11 @@ export function initialGameState(origin: RoomOrigin = 'lobby'): GameState {
     countdownEndsAt: null,
     handResultEndsAt: null,
     duelPicks: {},
-    deadlineAt:  null,
-    deadlineKey:  null,
+    deadlineAt: null,
+    deadlineKey: null,
     deadlineTotalMs: 0,
+    botJoinAt: null,
+    oppMemory: {},
   }
 }
 

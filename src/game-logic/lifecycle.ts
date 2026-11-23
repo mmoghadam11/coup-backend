@@ -3,6 +3,7 @@ import { buildFullDeck } from './roles'
 import { DUEL_ENABLED, MIN_PLAYERS_TO_START, STARTING_COUNTDOWN_SECONDS } from './matchmakingConfig'
 import { beginDuelPick } from './duel';
 import { readyQuorum, rulesOf } from './roomRules';
+import { reconcileBots } from './bots/botRoster';
 
 export function dealNewGame(game: GameState) {
   if (DUEL_ENABLED && game.players.length === 2) { beginDuelPick(game); return }
@@ -55,6 +56,7 @@ export function forceResetGame(game: GameState) {
 
 // تصمیم می‌گیرد شمارش شروع شود یا لغو شود
 export function evaluateMatchmakingTransition(game: GameState): { needsAlarmUpdate: boolean } {
+  reconcileBots(game) // رفتن ربات در لحظه‌ی لازم
   if (game.roomPhase === 'closed' || game.phase === 'room_closed') return { needsAlarmUpdate: false }
 
   const rules = rulesOf(game)
