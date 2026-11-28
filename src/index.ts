@@ -9,6 +9,7 @@ import { botWebhookRoutes } from './bot/webhook'
 import { runWeeklyReminderJob } from './bot/reminderJob'
 import { skinsRoutes } from './skins'
 import { groupsRoutes } from './groups'
+import { playerReactionRoutes } from './playerReactionRoutes'
 
 export { RoomDO } from './durable-objects/RoomDO'
 
@@ -45,6 +46,7 @@ app.route('/rooms', roomsRoutes)
 app.route('/bot/webhook', botWebhookRoutes)
 app.route('/skins', skinsRoutes)
 app.route('/groups', groupsRoutes)
+app.route('/reactions', playerReactionRoutes)
 
 // export default app
 

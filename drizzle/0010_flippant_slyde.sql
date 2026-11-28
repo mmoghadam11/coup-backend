@@ -1,0 +1,1 @@
+ALTER TABLE `users` ADD `reaction_pack` text;

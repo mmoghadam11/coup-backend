@@ -10,7 +10,8 @@ export const users = sqliteTable('users', {
   active_room_id: text('active_room_id'),
   role: text('role').notNull().default('player'), // 'player' | 'admin'
   created_at: integer('created_at').notNull().default(0),
-  card_skins: text('card_skins')
+  card_skins: text('card_skins'),
+  reaction_pack: text('reaction_pack'),
 })
 
 export const sessions = sqliteTable('sessions', {
@@ -82,3 +83,28 @@ export const groupPlayerStats = sqliteTable(
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
   })
 )
+
+export const reactions = sqliteTable('reactions', {
+  id: text('id').primaryKey(),                         // slug لاتین، مثل "horns"
+  glyph: text('glyph').notNull(),                      // خود ایموجی
+  label: text('label').notNull(),
+  category: text('category').notNull().default('tease'),
+  comments: text('comments').notNull().default('[]'),  // آرایه‌ی JSON از جمله‌ها
+  price: integer('price').notNull().default(0),        // به واحد CURRENCY؛ ۰ = رایگان
+  mature: integer('mature').notNull().default(0),
+  active: integer('active').notNull().default(1),
+  sort: integer('sort').notNull().default(0),
+  created_at: integer('created_at').notNull().default(0),
+})
+
+// مالکیت واکنش‌های پولی؛ برای رایگان‌ها ردیف لازم نیست
+export const userReactions = sqliteTable('user_reactions', {
+  user_id: integer('user_id').notNull().references(() => users.id),
+  reaction_id: text('reaction_id').notNull().references(() => reactions.id),
+  acquired_at: integer('acquired_at').notNull().default(0),
+}, (t) => ({ pk: primaryKey({ columns: [t.user_id, t.reaction_id] }) }))
+
+export const appSettings = sqliteTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+})

@@ -1,11 +1,14 @@
 import { Hono } from 'hono'
 import { eq, sql, desc, asc, ne, and } from 'drizzle-orm'
 import { getDb } from './db'
-import { users, rooms, sessions, roomPlayers, telegramGroups } from './db/schema'
+import { users, rooms, sessions, roomPlayers, telegramGroups, reactions, userReactions } from './db/schema'
 import { requireAdmin } from './adminMiddleware'
 import { markRoomFinishedAndClearPlayers } from './db/roomCleanup'
 import { runWeeklyReminderJob, sendTestReminder } from './bot/reminderJob'
 import { tgCall } from './bot/telegramApi'
+import { validateReactionInput, PREMIUM_CURRENCY, CATEGORY_LABELS } from './game-logic/reactionRules'
+import { listReactionDefs, seedReactionsIfEmpty } from './db/reactionCatalogRepo'
+import { getAllBooleanSettings, setBooleanSetting, SETTING_DEFAULTS } from './db/appSettings'
 
 type Bindings = { DB: D1Database; ROOM_DO: DurableObjectNamespace; TELEGRAM_BOT_TOKEN: string ,WEBHOOK_SECRET?: string}
 type Variables = { userId: number }
@@ -84,6 +87,7 @@ adminRoutes.delete('/users/:id', async (c) => {
   // اول همه‌ی چیزهایی که به این کاربر وابسته‌ن رو پاک/جدا کن
   await db.delete(sessions).where(eq(sessions.user_id, id))
   await db.delete(roomPlayers).where(eq(roomPlayers.user_id, id))
+  await db.delete(userReactions).where(eq(userReactions.user_id, id))
   // روم‌های فعالی که این کاربر ساخته رو پایان بده (قبل از اینکه created_by رو null کنیم)
   await db
     .update(rooms)
@@ -167,6 +171,111 @@ adminRoutes.delete('/rooms/:id', async (c) => {
   return c.json({ ok: true })
 })
 
+// ---- reactions ----
+
+// فهرست کامل (فعال و غیرفعال) + تعداد مالکان هر واکنش + اطلاعات لازم برای فرم
+adminRoutes.get('/reactions', async (context) => {
+  const db = getDb(context.env.DB)
+  const [reactionDefs, ownerCountRows] = await Promise.all([
+    listReactionDefs(context.env.DB, false),
+    db.select({ reactionId: userReactions.reaction_id, total: sql<number>`count(*)` })
+      .from(userReactions)
+      .groupBy(userReactions.reaction_id),
+  ])
+  const ownerCountById = new Map(ownerCountRows.map((ownerCountRow) => [ownerCountRow.reactionId, Number(ownerCountRow.total)]))
+
+  return context.json({
+    reactions: reactionDefs.map((reactionDef) => ({ ...reactionDef, ownerCount: ownerCountById.get(reactionDef.id) ?? 0 })),
+    categories: CATEGORY_LABELS,
+    currency: PREMIUM_CURRENCY,
+  })
+})
+
+// ساخت داده‌ی اولیه؛ اگر جدول خالی نباشد چیزی اضافه نمی‌کند
+adminRoutes.post('/reactions/seed', async (context) =>
+  context.json({ inserted: await seedReactionsIfEmpty(context.env.DB) }))
+
+adminRoutes.post('/reactions', async (context) => {
+  const { errorMessage, cleaned } = validateReactionInput(await context.req.json().catch(() => ({})), true)
+  if (errorMessage || !cleaned) return context.json({ error: errorMessage }, 400)
+
+  const db = getDb(context.env.DB)
+  const [duplicateRow] = await db.select({ id: reactions.id }).from(reactions).where(eq(reactions.id, cleaned.id!))
+  if (duplicateRow) return context.json({ error: 'این شناسه قبلاً وجود دارد' }, 409)
+
+  await db.insert(reactions).values({
+    id: cleaned.id!,
+    glyph: cleaned.glyph!,
+    label: cleaned.label!,
+    category: cleaned.category ?? 'tease',
+    comments: JSON.stringify(cleaned.comments),
+    price: cleaned.price ?? 0,
+    mature: cleaned.mature ? 1 : 0,
+    active: cleaned.active === false ? 0 : 1,
+    sort: cleaned.sort ?? 0,
+    created_at: Date.now(),
+  })
+  return context.json({ ok: true })
+})
+
+adminRoutes.patch('/reactions/:id', async (context) => {
+  const reactionId = context.req.param('id')
+  const { errorMessage, cleaned } = validateReactionInput(await context.req.json().catch(() => ({})), false)
+  if (errorMessage || !cleaned) return context.json({ error: errorMessage }, 400)
+
+  const db = getDb(context.env.DB)
+  const [existingRow] = await db.select({ id: reactions.id }).from(reactions).where(eq(reactions.id, reactionId))
+  if (!existingRow) return context.json({ error: 'واکنش پیدا نشد' }, 404)
+
+  // فقط فیلدهایی که فرستاده شده‌اند؛ شناسه هیچ‌وقت عوض نمی‌شود
+  const changes: Partial<typeof reactions.$inferInsert> = {}
+  if (cleaned.glyph !== undefined) changes.glyph = cleaned.glyph
+  if (cleaned.label !== undefined) changes.label = cleaned.label
+  if (cleaned.category !== undefined) changes.category = cleaned.category
+  if (cleaned.comments !== undefined) changes.comments = JSON.stringify(cleaned.comments)
+  if (cleaned.price !== undefined) changes.price = cleaned.price
+  if (cleaned.mature !== undefined) changes.mature = cleaned.mature ? 1 : 0
+  if (cleaned.active !== undefined) changes.active = cleaned.active ? 1 : 0
+  if (cleaned.sort !== undefined) changes.sort = cleaned.sort
+  if (!Object.keys(changes).length) return context.json({ error: 'تغییری ارسال نشده' }, 400)
+
+  await db.update(reactions).set(changes).where(eq(reactions.id, reactionId))
+  return context.json({ ok: true })
+})
+
+// حذف سخت فقط وقتی هیچ‌کس مالک نیست؛ وگرنه باید غیرفعال شود تا خرید کاربران از بین نرود
+adminRoutes.delete('/reactions/:id', async (context) => {
+  const reactionId = context.req.param('id')
+  const db = getDb(context.env.DB)
+
+  const [ownerRow] = await db.select({ userId: userReactions.user_id })
+    .from(userReactions).where(eq(userReactions.reaction_id, reactionId)).limit(1)
+  if (ownerRow) return context.json({ error: 'این واکنش مالک دارد؛ به‌جای حذف، غیرفعالش کن' }, 409)
+
+  await db.delete(reactions).where(eq(reactions.id, reactionId))
+  return context.json({ ok: true })
+})
+
+// دادن مالکیت به یک کاربر (برای تست واکنش‌های پولی؛ بعداً مسیر خرید همین کار را می‌کند)
+adminRoutes.post('/reactions/:id/grant', async (context) => {
+  const reactionId = context.req.param('id')
+  const requestBody: any = await context.req.json().catch(() => ({}))
+  const targetUserId = Number(requestBody.userId)
+  if (!Number.isInteger(targetUserId)) return context.json({ error: 'شناسه‌ی کاربر نامعتبر است' }, 400)
+
+  const db = getDb(context.env.DB)
+  const [[reactionRow], [userRow]] = await Promise.all([
+    db.select({ id: reactions.id }).from(reactions).where(eq(reactions.id, reactionId)),
+    db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)),
+  ])
+  if (!reactionRow || !userRow) return context.json({ error: 'واکنش یا کاربر پیدا نشد' }, 404)
+
+  await db.insert(userReactions)
+    .values({ user_id: targetUserId, reaction_id: reactionId, acquired_at: Date.now() })
+    .onConflictDoNothing()
+  return context.json({ ok: true })
+})
+
 adminRoutes.post('/test-reminder/:userId', async (c) => {
   const userId = Number(c.req.param('userId'))
   const sent = await sendTestReminder(c.env.DB, c.env.TELEGRAM_BOT_TOKEN, userId)
@@ -206,4 +315,17 @@ adminRoutes.post('/bot/setup', async (c) => {
   })
   const commands = await tgCall(token, 'setMyCommands', { commands: BOT_COMMANDS })
   return c.json({ webhook: webhook.ok, commands: commands.ok, ...(await botReport(c.env, origin)) })
+})
+
+adminRoutes.get('/settings', async (context) => context.json({ settings: await getAllBooleanSettings(context.env.DB) }))
+
+adminRoutes.put('/settings', async (context) => {
+  const requestBody: any = await context.req.json().catch(() => ({}))
+  for (const [settingKey, settingValue] of Object.entries(requestBody)) {
+    // فقط کلیدهای شناخته‌شده؛ ورودی دلخواه نوشته نمی‌شود
+    if (settingKey in SETTING_DEFAULTS && typeof settingValue === 'boolean') {
+      await setBooleanSetting(context.env.DB, settingKey, settingValue)
+    }
+  }
+  return context.json({ settings: await getAllBooleanSettings(context.env.DB) })
 })

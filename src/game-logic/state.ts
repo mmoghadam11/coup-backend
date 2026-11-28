@@ -53,6 +53,8 @@ export interface InternalPlayer {
   hist?: { games: number; bluffPG: number }
   botKey?: string | null
   leftRoom?: boolean
+
+  reactions?: string[]
 }
 
 export interface RevealPending {

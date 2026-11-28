@@ -29,10 +29,19 @@ import { stageOf, syncPhaseDeadline, waitedOn } from '../game-logic/phaseTimer'
 import { rulesOf } from '../game-logic/roomRules'
 import { planBotMove, thinkKindOf } from '../game-logic/bots/botBrain'
 import { botsOf, humansOf, maybeAddBot, thinkMs } from '../game-logic/bots/botRoster'
+import { pickRandomComment, ReactionDef } from '../game-logic/reactionRules'
+import { equippedReactionIdsFor, listReactionDefs } from '../db/reactionCatalogRepo'
+import { getBooleanSetting, SETTING_REACTIONS_MATURE } from '../db/appSettings'
 
 type Env = { DB: D1Database }
 
 const ALLOWED_DURING_SHOWCASE = ['mm_leave', 'leave_table', 'leave_room']
+// محدودیت ارسال واکنش: حداقل فاصله بین دو واکنش و سقف تعداد در یک بازه
+const REACTION_MIN_GAP_MS = 2500
+const REACTION_WINDOW_MS = 30_000
+const REACTION_MAX_PER_WINDOW = 6
+// فهرست واکنش‌ها و سوییچ «تند» از D1 خوانده می‌شود؛ این‌قدر در حافظه می‌ماند تا هر واکنش D1 نخواند
+const REACTION_CACHE_TTL_MS = 60_000
 
 export class RoomDO {
   state: DurableObjectState
@@ -47,6 +56,54 @@ export class RoomDO {
   // handlerها حین await به D1 وسط هم نمی‌پرند؛ همه‌ی رویدادها یکی‌یکی اجرا می‌شوند.
   // خطای یکی، بقیه را متوقف نمی‌کند
   private chain: Promise<unknown> = Promise.resolve()
+  // ───────────── واکنش‌ها: کش و محدودیت نرخ (فقط در حافظه) ─────────────
+  private reactionDefsCache: { defs: Map<string, ReactionDef>; loadedAt: number } | null = null
+  private matureCache: { allowed: boolean; loadedAt: number } | null = null
+  private reactionSendTimes = new Map<number, number[]>()
+
+  private async getReactionDefs(): Promise<Map<string, ReactionDef>> {
+    const now = Date.now()
+    if (!this.reactionDefsCache || now - this.reactionDefsCache.loadedAt > REACTION_CACHE_TTL_MS) {
+      const activeDefs = await listReactionDefs(this.env.DB, true)
+      this.reactionDefsCache = { defs: new Map(activeDefs.map((reactionDef) => [reactionDef.id, reactionDef])), loadedAt: now }
+    }
+    return this.reactionDefsCache.defs
+  }
+
+  private async isMatureAllowed(): Promise<boolean> {
+    const now = Date.now()
+    if (!this.matureCache || now - this.matureCache.loadedAt > REACTION_CACHE_TTL_MS) {
+      this.matureCache = { allowed: await getBooleanSetting(this.env.DB, SETTING_REACTIONS_MATURE, true), loadedAt: now }
+    }
+    return this.matureCache.allowed
+  }
+
+  // واکنش گذرا است: ذخیره نمی‌شود، alarm نمی‌خواهد و فقط برای همه پخش می‌شود
+  private async handleReaction(ws: WebSocket, game: GameState, userId: number, emojiId: string) {
+    const player = game.players.find((playerItem) => playerItem.userId === userId)
+    if (!player || player.leftRoom || !player.reactions?.includes(emojiId)) return
+
+    const now = Date.now()
+    const recentTimes = (this.reactionSendTimes.get(userId) ?? []).filter((sentAt) => now - sentAt < REACTION_WINDOW_MS)
+    const lastSentAt = recentTimes[recentTimes.length - 1] ?? 0
+    if (now - lastSentAt < REACTION_MIN_GAP_MS || recentTimes.length >= REACTION_MAX_PER_WINDOW) return
+    this.reactionSendTimes.set(userId, [...recentTimes, now])
+
+    // دوباره با فهرست زنده می‌سنجیم؛ ادمین ممکن است بعد از اتصال غیرفعال یا «تند» را بسته باشد
+    const reactionDef = (await this.getReactionDefs()).get(emojiId)
+    if (!reactionDef || (reactionDef.mature && !(await this.isMatureAllowed()))) return
+
+    const payload = JSON.stringify({
+      type: 'reaction',
+      playerId: userId,
+      name: player.firstName,
+      emojiId: reactionDef.id,
+      glyph: reactionDef.glyph,
+      text: pickRandomComment(reactionDef),
+      mature: reactionDef.mature,
+    })
+    for (const socketItem of this.state.getWebSockets()) socketItem.send(payload)
+  }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const run = this.chain.then(fn)
     this.chain = run.then(() => undefined, () => undefined)
@@ -124,6 +181,7 @@ export class RoomDO {
         existing.firstName = user.first_name ?? 'بازیکن'
         if (!existing.stats) existing.stats = emptyStats()
         existing.skins = parseSkins(user.card_skins)
+        existing.reactions = await equippedReactionIdsFor(this.env.DB, user.id, user.reaction_pack, await this.isMatureAllowed())
         clearDisconnect(game, user.id)
       } else {
         game.players.push({
@@ -137,6 +195,7 @@ export class RoomDO {
           stats: emptyStats(),
           skins: parseSkins(user.card_skins),
           ready: game.roomPhase === 'starting', // کسی که وسط شمارش می‌رسد، آماده است
+          reactions: await equippedReactionIdsFor(this.env.DB, user.id, user.reaction_pack, await this.isMatureAllowed()),
         })
         game.log.push(`${user.first_name} به روم پیوست`)
         if (botsOf(game).length) await this.loadHistory(game)
@@ -169,6 +228,7 @@ export class RoomDO {
     try { data = JSON.parse(message) } catch { return }
 
     const game = await this.getGame()
+    if (data.type === 'reaction') { await this.handleReaction(ws, game, userId, String(data.emojiId)); return }
     if (game.showcase && !ALLOWED_DURING_SHOWCASE.includes(data.type)) return
     let wipe = false
 

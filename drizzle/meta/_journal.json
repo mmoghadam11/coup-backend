@@ -57,6 +57,27 @@
       "when": 1793751574773,
       "tag": "0007_minor_bishop",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1795700628026,
+      "tag": "0008_pretty_nightmare",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1795823911773,
+      "tag": "0009_narrow_giant_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1795825117174,
+      "tag": "0010_flippant_slyde",
+      "breakpoints": true
     }
   ]
 }
